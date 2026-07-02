@@ -79,6 +79,14 @@ class ConnectRequest(BaseModel):
     transport: str = "auto"  # auto, streamable_http, sse
 
 
+class ExecuteRequest(BaseModel):
+    url: str
+    auth: AuthConfig = AuthConfig()
+    transport: str = "auto"
+    tool_name: str
+    tool_args: dict = {}
+
+
 def estimate_tokens(text: str) -> int:
     return max(1, len(text) // 4)
 
@@ -157,6 +165,66 @@ async def _connect_sse(url: str, headers: dict) -> tuple[list, dict]:
             info["protocol_version"] = str(result.protocolVersion) if result.protocolVersion else "unknown"
             tools = [tool_to_dict(t) for t in (await session.list_tools()).tools]
     return tools, info
+
+
+def _serialize_content(result: Any) -> tuple[list[dict], bool]:
+    items: list[dict] = []
+    for item in (getattr(result, "content", None) or []):
+        t = getattr(item, "type", None)
+        if t == "text":
+            items.append({"type": "text", "text": getattr(item, "text", "")})
+        elif t == "image":
+            items.append({"type": "image", "data": getattr(item, "data", ""), "mimeType": getattr(item, "mimeType", "image/png")})
+        elif t == "resource":
+            res = getattr(item, "resource", None)
+            entry: dict = {"type": "resource", "uri": str(getattr(res, "uri", "")) if res else ""}
+            if res:
+                txt = getattr(res, "text", None)
+                if txt is not None:
+                    entry["text"] = txt
+            items.append(entry)
+        else:
+            if hasattr(item, "model_dump"):
+                try:
+                    items.append(item.model_dump())
+                    continue
+                except Exception:
+                    pass
+            items.append({"type": str(t) if t else "unknown", "raw": str(item)})
+    return items, bool(getattr(result, "isError", False))
+
+
+async def _exec_streamable(url: str, headers: dict, tool_name: str, tool_args: dict) -> Any:
+    async with streamablehttp_client(url, headers=headers) as (read, write, _):
+        async with ClientSession(read, write) as session:
+            await session.initialize()
+            return await session.call_tool(tool_name, tool_args)
+
+
+async def _exec_sse(url: str, headers: dict, tool_name: str, tool_args: dict) -> Any:
+    async with sse_client(url, headers=headers) as (read, write):
+        async with ClientSession(read, write) as session:
+            await session.initialize()
+            return await session.call_tool(tool_name, tool_args)
+
+
+async def call_tool_on_server(url: str, headers: dict, transport: str, tool_name: str, tool_args: dict) -> tuple[Any, str]:
+    timeout = 60.0
+    if transport == "streamable_http":
+        return await asyncio.wait_for(_exec_streamable(url, headers, tool_name, tool_args), timeout), "streamable_http"
+    if transport == "sse":
+        return await asyncio.wait_for(_exec_sse(url, headers, tool_name, tool_args), timeout), "sse"
+    err_s = ""
+    try:
+        res = await asyncio.wait_for(_exec_streamable(url, headers, tool_name, tool_args), timeout)
+        return res, "streamable_http"
+    except Exception as e:
+        err_s = str(e)
+    try:
+        res = await asyncio.wait_for(_exec_sse(url, headers, tool_name, tool_args), timeout)
+        return res, "sse"
+    except Exception as e:
+        raise RuntimeError(f"Both transports failed.\n• Streamable HTTP: {err_s}\n• SSE: {e}")
 
 
 async def connect_and_get_tools(url: str, headers: dict, transport: str) -> tuple[list, dict, str]:
@@ -581,6 +649,32 @@ async def connect_to_mcp(req: ConnectRequest):
         }
     except Exception as e:
         logger.exception("Connection failed")
+        return JSONResponse(
+            status_code=400,
+            content={"success": False, "error": str(e), "error_type": type(e).__name__},
+        )
+
+
+@app.post("/api/execute")
+async def execute_tool_api(req: ExecuteRequest):
+    try:
+        headers = await build_headers(req.auth)
+        t0 = time.perf_counter()
+        result, transport_used = await call_tool_on_server(
+            req.url, headers, req.transport, req.tool_name, req.tool_args
+        )
+        exec_ms = round((time.perf_counter() - t0) * 1000)
+        content, is_error = _serialize_content(result)
+        return {
+            "success": True,
+            "tool_name": req.tool_name,
+            "is_error": is_error,
+            "content": content,
+            "exec_time_ms": exec_ms,
+            "transport_used": transport_used,
+        }
+    except Exception as e:
+        logger.exception("Tool execution failed")
         return JSONResponse(
             status_code=400,
             content={"success": False, "error": str(e), "error_type": type(e).__name__},

@@ -275,6 +275,43 @@ select option { background: var(--surface2); }
 #sso-status-msg { font-size: 11px; min-height: 16px; }
 details summary { list-style: none; }
 details summary::-webkit-details-marker { display: none; }
+
+/* Execute section */
+.exec-section { margin-top: 12px; border-top: 1px solid var(--border); padding-top: 12px; display: none; }
+.exec-section.open { display: block; }
+.exec-form { display: flex; flex-direction: column; gap: 8px; }
+.exec-input {
+  width: 100%; padding: 5px 8px; font-size: 12px;
+  background: var(--surface2); border: 1px solid var(--border);
+  color: var(--text); border-radius: var(--radius-sm); outline: none;
+}
+.exec-input:focus { border-color: var(--accent); }
+.exec-textarea {
+  width: 100%; padding: 5px 8px; font-size: 11px;
+  background: var(--surface2); border: 1px solid var(--border);
+  color: var(--text); border-radius: var(--radius-sm); outline: none;
+  font-family: "SF Mono","Fira Code",monospace; resize: vertical; line-height: 1.5;
+}
+.exec-textarea:focus { border-color: var(--accent); }
+.btn-run {
+  padding: 5px 14px; font-size: 11px; border-radius: var(--radius-sm); cursor: pointer;
+  border: 1px solid rgba(63,185,80,0.4); background: rgba(63,185,80,0.1);
+  color: var(--success); font-weight: 600; transition: all 0.15s; white-space: nowrap;
+}
+.btn-run:hover { background: rgba(63,185,80,0.2); border-color: var(--success); }
+.btn-run:disabled { opacity: 0.5; cursor: not-allowed; }
+.btn-execute { border-color: rgba(88,166,255,0.3) !important; color: var(--accent) !important; background: var(--accent-dim) !important; }
+.btn-execute:hover { background: #2a4a7f !important; border-color: var(--accent) !important; }
+.btn-execute.active { background: rgba(88,166,255,0.2) !important; }
+.exec-result { display: none; margin-top: 10px; }
+.exec-result.show { display: block; }
+.result-block {
+  background: var(--bg); border: 1px solid var(--border); border-radius: var(--radius-sm);
+  padding: 10px; font-family: "SF Mono","Fira Code",monospace; font-size: 11px;
+  color: var(--text); overflow-x: auto; white-space: pre-wrap; max-height: 400px;
+  overflow-y: auto; line-height: 1.6;
+}
+.result-block.is-error { border-color: rgba(248,81,73,0.3); background: rgba(248,81,73,0.05); color: #ff9492; }
 </style>
 </head>
 <body>
@@ -384,6 +421,7 @@ details summary::-webkit-details-marker { display: none; }
 let currentTools = [];
 let maxTokens = 0;
 let tokenDisplayMode = 'estimate'; // 'estimate' | 'api'
+let currentConnection = null; // {url, auth, transport}
 
 // ── Auth fields ──────────────────────────────────────────────────
 const AUTH_FIELDS = {
@@ -532,6 +570,7 @@ async function doConnect(url, auth, transport) {
   if (!resp.ok || !data.success) {
     showError(data.error || 'Connection failed', data.error_type);
   } else {
+    currentConnection = { url, auth, transport };
     saveHistory(url);
     renderResults(data, roundtripMs);
     if (document.getElementById('mode-api').checked && document.getElementById('api-key').value) {
@@ -773,7 +812,10 @@ function renderResults(data, roundtripMs) {
         <div style="font-size:13px;font-weight:600">
           Tools <span style="color:var(--text-muted);font-weight:400">(${data.tool_count})</span>
         </div>
-        <input class="search-input" id="tool-search" placeholder="Search tools..." oninput="filterTools(this.value)" />
+        <div style="display:flex;align-items:center;gap:8px">
+          <button class="btn-sm" id="clear-all-btn" onclick="clearAllExecResults()" style="display:none;font-size:10px;padding:3px 9px">✕ Clear All Results</button>
+          <input class="search-input" id="tool-search" placeholder="Search tools..." oninput="filterTools(this.value)" />
+        </div>
       </div>
       <div class="tools-list" id="tools-list"></div>
     </div>`;
@@ -836,7 +878,9 @@ function buildToolCard(tool, idx) {
       <div class="tool-footer">
         <button class="btn-sm" onclick="copyTool(${ciIdx},'claude')">Claude API</button>
         <button class="btn-sm" onclick="copyTool(${ciIdx},'mcp')">MCP</button>
+        <button class="btn-sm btn-execute" id="exec-toggle-${ciIdx}" onclick="toggleExecSection(${ciIdx})">▶ Execute</button>
       </div>
+      ${buildExecuteSection(tool, ciIdx)}
     </div>`;
   return card;
 }
@@ -859,6 +903,188 @@ function copyText(text) {
     toast.classList.add('show');
     setTimeout(() => toast.classList.remove('show'), 2000);
   });
+}
+
+// ── Execute ──────────────────────────────────────────────────────
+function buildExecuteSection(tool, idx) {
+  const props = tool.inputSchema?.properties || {};
+  const required = tool.inputSchema?.required || [];
+  const keys = Object.keys(props);
+
+  let formHtml;
+  if (keys.length === 0) {
+    formHtml = '<div style="font-size:12px;color:var(--text-dim);font-style:italic;margin-bottom:8px">No parameters required</div>';
+  } else {
+    formHtml = '<div class="exec-form">';
+    for (const key of keys) {
+      const schema = props[key];
+      const isReq = required.includes(key);
+      const type  = schema.type || 'string';
+      const desc  = schema.description || '';
+      const enums = schema.enum;
+      const iid   = `exec-${idx}-p-${key}`;
+
+      let inp;
+      if (enums && enums.length > 0) {
+        inp = `<select id="${iid}" class="exec-input">
+          ${!isReq ? '<option value="">— select —</option>' : ''}
+          ${enums.map(v => `<option>${escHtml(String(v))}</option>`).join('')}
+        </select>`;
+      } else if (type === 'boolean') {
+        inp = `<div style="display:flex;align-items:center;gap:6px;margin-top:2px">
+          <input type="checkbox" id="${iid}" style="accent-color:var(--accent);width:13px;height:13px" />
+          <span style="font-size:11px;color:var(--text-dim)">true when checked</span></div>`;
+      } else if (type === 'number' || type === 'integer') {
+        inp = `<input type="number" id="${iid}" class="exec-input" placeholder="${escHtml(desc || type)}" />`;
+      } else if (type === 'object' || type === 'array') {
+        inp = `<textarea id="${iid}" class="exec-textarea" rows="3" placeholder="JSON (${escHtml(type)})…"></textarea>`;
+      } else {
+        inp = `<input type="text" id="${iid}" class="exec-input" placeholder="${escHtml(desc)}" />`;
+      }
+
+      formHtml += `<div>
+        <div style="font-size:11px;margin-bottom:3px">
+          <span style="color:var(--text-muted);font-weight:500">${escHtml(key)}</span>${isReq ? '<span style="color:var(--warning)"> *</span>' : ''}
+          <span style="color:var(--text-dim);font-size:10px;margin-left:5px">${escHtml(type)}</span>
+        </div>
+        ${desc ? `<div style="font-size:10px;color:var(--text-dim);margin-bottom:3px">${escHtml(desc)}</div>` : ''}
+        ${inp}</div>`;
+    }
+    formHtml += '</div>';
+  }
+
+  return `<div class="exec-section" id="exec-section-${idx}">
+    <div class="section-label" style="margin-bottom:8px">Execute Tool</div>
+    ${formHtml}
+    <div style="display:flex;align-items:center;gap:8px;margin-top:8px">
+      <button class="btn-run" id="exec-run-${idx}" onclick="runTool(${idx})">▶ Run</button>
+      <span id="exec-status-${idx}" style="font-size:11px"></span>
+    </div>
+    <div class="exec-result" id="exec-result-${idx}">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;margin-top:10px">
+        <span class="section-label">Result</span>
+        <button class="btn-sm" onclick="clearExecResult(${idx})" style="font-size:10px;padding:2px 8px">✕ Clear</button>
+      </div>
+      <div id="exec-result-content-${idx}"></div>
+    </div>
+  </div>`;
+}
+
+function toggleExecSection(idx) {
+  const sec = document.getElementById(`exec-section-${idx}`);
+  const btn = document.getElementById(`exec-toggle-${idx}`);
+  if (!sec) return;
+  const open = sec.classList.toggle('open');
+  if (btn) btn.classList.toggle('active', open);
+}
+
+async function runTool(idx) {
+  if (!currentConnection) { alert('Please connect to an MCP server first.'); return; }
+  const tool  = currentTools[idx];
+  const props = tool.inputSchema?.properties || {};
+  const req   = tool.inputSchema?.required   || [];
+  const toolArgs = {};
+
+  for (const [key, schema] of Object.entries(props)) {
+    const type = schema.type || 'string';
+    const el   = document.getElementById(`exec-${idx}-p-${key}`);
+    if (!el) continue;
+
+    if (type === 'boolean') {
+      toolArgs[key] = el.checked;
+    } else if (type === 'number' || type === 'integer') {
+      const raw = el.value.trim();
+      if (raw !== '') {
+        const n = type === 'integer' ? parseInt(raw, 10) : parseFloat(raw);
+        if (isNaN(n)) { alert(`"${key}" must be a valid ${type}`); return; }
+        toolArgs[key] = n;
+      } else if (req.includes(key)) { alert(`Required: "${key}"`); return; }
+    } else if (type === 'object' || type === 'array') {
+      const raw = el.value.trim();
+      if (raw !== '') {
+        try { toolArgs[key] = JSON.parse(raw); }
+        catch { alert(`"${key}": invalid JSON`); return; }
+      } else if (req.includes(key)) { alert(`Required: "${key}"`); return; }
+    } else {
+      const val = el.value.trim();
+      if (val !== '') toolArgs[key] = val;
+      else if (req.includes(key)) { alert(`Required: "${key}"`); return; }
+    }
+  }
+
+  const runBtn   = document.getElementById(`exec-run-${idx}`);
+  const statusEl = document.getElementById(`exec-status-${idx}`);
+  runBtn.disabled = true;
+  runBtn.innerHTML = '<span class="spinner"></span>';
+  statusEl.textContent = '';
+
+  const t0 = performance.now();
+  try {
+    const resp = await fetch('/api/execute', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        url: currentConnection.url,
+        auth: currentConnection.auth,
+        transport: currentConnection.transport,
+        tool_name: tool.name,
+        tool_args: toolArgs,
+      }),
+    });
+    const data = await resp.json();
+    const elapsed = Math.round(performance.now() - t0);
+
+    if (!resp.ok || !data.success) throw new Error(data.error || 'Execution failed');
+
+    renderExecResult(idx, data, elapsed);
+    const col = data.is_error ? 'var(--error)' : 'var(--success)';
+    statusEl.innerHTML = `<span style="color:${col}">${data.is_error ? '⚠ Tool error' : '✓'} server: ${fmtMs(data.exec_time_ms)} · roundtrip: ${fmtMs(elapsed)}</span>`;
+  } catch (e) {
+    statusEl.innerHTML = `<span style="color:var(--error)">${escHtml(e.message)}</span>`;
+  } finally {
+    runBtn.disabled = false;
+    runBtn.innerHTML = '▶ Run';
+  }
+}
+
+function renderExecResult(idx, data, roundtripMs) {
+  const contentEl = document.getElementById(`exec-result-content-${idx}`);
+  const resultEl  = document.getElementById(`exec-result-${idx}`);
+  if (!contentEl || !resultEl) return;
+
+  let html = '';
+  for (const item of data.content) {
+    if (item.type === 'text') {
+      let display = item.text;
+      try { display = JSON.stringify(JSON.parse(item.text), null, 2); } catch {}
+      html += `<div class="result-block${data.is_error ? ' is-error' : ''}">${escHtml(display)}</div>`;
+    } else if (item.type === 'image') {
+      html += `<img src="data:${escHtml(item.mimeType)};base64,${escHtml(item.data)}" style="max-width:100%;border-radius:4px;margin-top:4px" />`;
+    } else {
+      html += `<div class="result-block">${syntaxHighlight(item)}</div>`;
+    }
+  }
+  if (!html) html = '<div style="color:var(--text-dim);font-size:12px;font-style:italic">(empty response)</div>';
+
+  contentEl.innerHTML = html;
+  resultEl.classList.add('show');
+  const clearAllBtn = document.getElementById('clear-all-btn');
+  if (clearAllBtn) clearAllBtn.style.display = 'inline-flex';
+}
+
+function clearExecResult(idx) {
+  const resultEl  = document.getElementById(`exec-result-${idx}`);
+  const contentEl = document.getElementById(`exec-result-content-${idx}`);
+  const statusEl  = document.getElementById(`exec-status-${idx}`);
+  if (resultEl)  resultEl.classList.remove('show');
+  if (contentEl) contentEl.innerHTML = '';
+  if (statusEl)  statusEl.textContent = '';
+}
+
+function clearAllExecResults() {
+  currentTools.forEach((_, i) => clearExecResult(i));
+  const clearAllBtn = document.getElementById('clear-all-btn');
+  if (clearAllBtn) clearAllBtn.style.display = 'none';
 }
 
 // ── Helpers ──────────────────────────────────────────────────────
