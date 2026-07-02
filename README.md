@@ -36,7 +36,11 @@ Connect to any MCP server, browse its tools, measure fetch latency, and estimate
 git clone https://github.com/ytkoka/mcp-tester.git
 cd mcp-tester
 uv venv
-uv pip install "mcp>=1.0.0" "fastapi>=0.100.0" "uvicorn[standard]>=0.20.0" "httpx>=0.25.0"
+uv pip install \
+  "mcp>=1.0.0" \
+  "fastapi>=0.100.0" \
+  "uvicorn[standard]>=0.20.0" \
+  "httpx>=0.25.0"
 ```
 
 ### Using pip
@@ -45,8 +49,12 @@ uv pip install "mcp>=1.0.0" "fastapi>=0.100.0" "uvicorn[standard]>=0.20.0" "http
 git clone https://github.com/ytkoka/mcp-tester.git
 cd mcp-tester
 python -m venv .venv
-source .venv/bin/activate       # Windows: .venv\Scripts\activate
-pip install "mcp>=1.0.0" "fastapi>=0.100.0" "uvicorn[standard]>=0.20.0" "httpx>=0.25.0"
+source .venv/bin/activate  # Windows: .venv\Scripts\activate
+pip install \
+  "mcp>=1.0.0" \
+  "fastapi>=0.100.0" \
+  "uvicorn[standard]>=0.20.0" \
+  "httpx>=0.25.0"
 ```
 
 ---
