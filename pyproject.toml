@@ -1,0 +1,18 @@
+[project]
+name = "mcp-tester"
+version = "0.1.0"
+description = "MCP Server Tool Inspector - connect, list tools, estimate token usage"
+requires-python = ">=3.11"
+dependencies = [
+    "mcp>=1.0.0",
+    "fastapi>=0.100.0",
+    "uvicorn[standard]>=0.20.0",
+    "httpx>=0.25.0",
+]
+
+[project.scripts]
+mcp-tester = "main:run"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"

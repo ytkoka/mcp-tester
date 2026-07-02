@@ -1,0 +1,893 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>MCP Server Tester</title>
+<style>
+:root {
+  --bg: #0d1117;
+  --surface: #161b22;
+  --surface2: #21262d;
+  --border: #30363d;
+  --accent: #58a6ff;
+  --accent-dim: #1f3a5f;
+  --text: #c9d1d9;
+  --text-muted: #8b949e;
+  --text-dim: #6e7681;
+  --success: #3fb950;
+  --warning: #d29922;
+  --error: #f85149;
+  --radius: 8px;
+  --radius-sm: 4px;
+}
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font-size: 14px;
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+header {
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+  padding: 12px 20px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-shrink: 0;
+}
+header h1 { font-size: 16px; font-weight: 600; }
+header .badge {
+  background: var(--accent-dim); color: var(--accent);
+  font-size: 11px; padding: 2px 8px; border-radius: 20px; border: 1px solid var(--accent);
+}
+.layout { display: flex; flex: 1; overflow: hidden; }
+.sidebar {
+  width: 320px; flex-shrink: 0;
+  background: var(--surface); border-right: 1px solid var(--border);
+  display: flex; flex-direction: column; overflow-y: auto;
+}
+.sidebar-inner { padding: 16px; display: flex; flex-direction: column; gap: 14px; }
+.main { flex: 1; overflow-y: auto; padding: 20px; display: flex; flex-direction: column; gap: 16px; }
+
+/* Form */
+label { font-size: 12px; color: var(--text-muted); font-weight: 500; display: block; margin-bottom: 5px; }
+input, select {
+  width: 100%; background: var(--surface2); border: 1px solid var(--border);
+  color: var(--text); border-radius: var(--radius-sm); padding: 7px 10px;
+  font-size: 13px; transition: border-color 0.15s; outline: none;
+}
+input:focus, select:focus { border-color: var(--accent); }
+input::placeholder { color: var(--text-dim); }
+select option { background: var(--surface2); }
+
+/* Auth tabs */
+.auth-tabs { display: flex; gap: 1px; background: var(--border); border-radius: var(--radius-sm); overflow: hidden; }
+.auth-tab {
+  flex: 1; padding: 6px 2px; font-size: 10px; text-align: center; cursor: pointer;
+  background: var(--surface2); color: var(--text-muted); border: none;
+  transition: background 0.15s, color 0.15s;
+}
+.auth-tab:hover { background: var(--border); color: var(--text); }
+.auth-tab.active { background: var(--accent-dim); color: var(--accent); }
+.auth-fields { display: flex; flex-direction: column; gap: 10px; }
+
+/* Buttons */
+.btn {
+  width: 100%; padding: 9px; border-radius: var(--radius-sm);
+  font-size: 13px; font-weight: 600; cursor: pointer; border: none;
+  transition: background 0.15s, opacity 0.15s;
+}
+.btn-primary { background: var(--accent); color: #0d1117; }
+.btn-primary:hover { background: #79bfff; }
+.btn-primary:disabled { opacity: 0.5; cursor: not-allowed; }
+.btn-sm {
+  padding: 4px 10px; font-size: 11px; border-radius: var(--radius-sm);
+  cursor: pointer; border: 1px solid var(--border);
+  background: var(--surface2); color: var(--text-muted); transition: all 0.15s;
+}
+.btn-sm:hover { border-color: var(--accent); color: var(--accent); }
+.btn-sm:disabled { opacity: 0.5; cursor: not-allowed; }
+.btn-count {
+  padding: 6px 14px; font-size: 12px; border-radius: var(--radius-sm); cursor: pointer;
+  border: 1px solid rgba(88,166,255,0.4); background: var(--accent-dim);
+  color: var(--accent); font-weight: 600; transition: all 0.15s;
+}
+.btn-count:hover { background: #2a4a7f; border-color: var(--accent); }
+.btn-count:disabled { opacity: 0.5; cursor: not-allowed; }
+
+/* Cards */
+.card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 14px 16px; }
+.card-title {
+  font-size: 11px; color: var(--text-muted); text-transform: uppercase;
+  letter-spacing: 0.06em; margin-bottom: 10px; font-weight: 600;
+}
+
+/* Stats */
+.stats-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; }
+.stat { text-align: center; }
+.stat-value { font-size: 22px; font-weight: 700; line-height: 1.2; }
+.stat-label { font-size: 11px; color: var(--text-muted); margin-top: 2px; }
+.accent { color: var(--accent); }
+.success { color: var(--success); }
+.warning { color: var(--warning); }
+
+/* Token mode badge */
+.tok-mode-badge {
+  display: inline-flex; align-items: center; gap: 4px;
+  font-size: 11px; padding: 2px 8px; border-radius: 20px; border: 1px solid;
+  margin-top: 10px;
+}
+.tok-mode-est { color: var(--text-dim); border-color: var(--border); background: transparent; }
+.tok-mode-api { color: var(--success); border-color: rgba(63,185,80,0.4); background: rgba(63,185,80,0.08); }
+
+/* Info grid */
+.info-grid { display: grid; grid-template-columns: auto 1fr; gap: 4px 12px; font-size: 13px; align-items: baseline; }
+.info-key { color: var(--text-muted); white-space: nowrap; }
+.info-val { color: var(--text); font-family: monospace; }
+
+/* Tools */
+.tools-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 10px; }
+.search-input {
+  width: 220px; padding: 6px 10px; font-size: 12px;
+  background: var(--surface2); border: 1px solid var(--border);
+  border-radius: var(--radius-sm); color: var(--text); outline: none;
+}
+.search-input:focus { border-color: var(--accent); }
+.tools-list { display: flex; flex-direction: column; gap: 8px; }
+
+/* Tool card */
+.tool-card {
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: var(--radius); overflow: hidden; transition: border-color 0.15s;
+}
+.tool-card:hover { border-color: #444c56; }
+.tool-header {
+  display: flex; align-items: center; gap: 10px; padding: 10px 14px;
+  cursor: pointer; user-select: none;
+}
+.tool-header:hover { background: var(--surface2); }
+.tool-icon { font-size: 14px; flex-shrink: 0; }
+.tool-name { font-weight: 600; font-family: monospace; font-size: 13px; flex: 1; }
+.tool-meta { display: flex; align-items: center; gap: 8px; }
+.token-badge {
+  font-size: 11px; padding: 2px 7px; border-radius: 20px; font-weight: 600; white-space: nowrap;
+}
+.tok-low  { background: rgba(63,185,80,0.15);  color: var(--success); border: 1px solid rgba(63,185,80,0.3); }
+.tok-med  { background: rgba(210,153,34,0.15); color: var(--warning); border: 1px solid rgba(210,153,34,0.3); }
+.tok-high { background: rgba(248,81,73,0.15);  color: var(--error);   border: 1px solid rgba(248,81,73,0.3); }
+.tok-api  { box-shadow: inset 0 0 0 1px currentColor; }
+.param-badge {
+  font-size: 11px; color: var(--text-dim); background: var(--surface2);
+  padding: 2px 6px; border-radius: 20px; border: 1px solid var(--border);
+}
+.chevron { color: var(--text-dim); font-size: 12px; transition: transform 0.2s; }
+.chevron.open { transform: rotate(90deg); }
+.tool-body { border-top: 1px solid var(--border); padding: 12px 14px; display: none; }
+.tool-body.open { display: block; }
+.tool-desc { color: var(--text-muted); font-size: 13px; margin-bottom: 10px; line-height: 1.5; }
+.tool-desc:empty::before { content: "(no description)"; color: var(--text-dim); font-style: italic; }
+.schema-label { font-size: 11px; color: var(--text-dim); text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 6px; }
+.json-block {
+  background: var(--bg); border: 1px solid var(--border); border-radius: var(--radius-sm);
+  padding: 10px; font-family: "SF Mono", "Fira Code", monospace; font-size: 11px; color: #a5d6ff;
+  overflow-x: auto; white-space: pre; max-height: 300px; overflow-y: auto; line-height: 1.6;
+}
+.tool-footer { display: flex; gap: 8px; margin-top: 10px; justify-content: flex-end; }
+
+/* Token bar */
+.token-bar-wrap { margin-top: 6px; }
+.token-bar-bg { height: 4px; background: var(--surface2); border-radius: 2px; overflow: hidden; }
+.token-bar-fill { height: 100%; border-radius: 2px; transition: width 0.4s; }
+
+/* Alert */
+.alert { padding: 10px 14px; border-radius: var(--radius); font-size: 13px; line-height: 1.5; display: flex; gap: 8px; align-items: flex-start; }
+.alert-error { background: rgba(248,81,73,0.1); border: 1px solid rgba(248,81,73,0.3); color: #ff9492; }
+.alert pre { white-space: pre-wrap; font-family: monospace; font-size: 12px; color: inherit; }
+
+/* Spinner */
+.spinner {
+  display: inline-block; width: 14px; height: 14px;
+  border: 2px solid var(--border); border-top-color: var(--accent);
+  border-radius: 50%; animation: spin 0.7s linear infinite; vertical-align: middle;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+
+/* Copy toast */
+#copy-toast {
+  position: fixed; bottom: 24px; left: 50%;
+  transform: translateX(-50%) translateY(20px);
+  background: var(--success); color: #0d1117;
+  padding: 8px 18px; border-radius: 20px; font-size: 13px; font-weight: 600;
+  opacity: 0; pointer-events: none; transition: opacity 0.2s, transform 0.2s; z-index: 100;
+}
+#copy-toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+
+/* History */
+.history-list { display: flex; flex-direction: column; gap: 4px; }
+.history-item {
+  font-size: 11px; color: var(--text-muted); padding: 4px 8px;
+  border-radius: var(--radius-sm); cursor: pointer;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  border: 1px solid transparent; transition: all 0.15s;
+}
+.history-item:hover { border-color: var(--border); color: var(--accent); background: var(--surface2); }
+
+.section-label { font-size: 11px; color: var(--text-dim); text-transform: uppercase; letter-spacing: 0.05em; font-weight: 600; }
+.divider { height: 1px; background: var(--border); }
+
+.empty-state { text-align: center; color: var(--text-dim); padding: 60px 20px; }
+.empty-state .icon { font-size: 48px; margin-bottom: 12px; }
+.empty-state p { font-size: 13px; }
+
+.tags { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 6px; }
+.tag {
+  font-size: 11px; background: var(--surface2); border: 1px solid var(--border);
+  color: var(--text-muted); padding: 2px 7px; border-radius: 20px;
+}
+.tag.required { border-color: rgba(210,153,34,0.4); color: var(--warning); background: rgba(210,153,34,0.1); }
+
+/* Token counting section */
+.count-mode-row { display: flex; gap: 16px; margin-bottom: 10px; }
+.radio-label { display: flex; align-items: center; gap: 5px; cursor: pointer; font-size: 12px; color: var(--text-muted); }
+.radio-label input { accent-color: var(--accent); cursor: pointer; }
+.radio-label:has(input:checked) { color: var(--text); }
+#api-settings { display: flex; flex-direction: column; gap: 10px; }
+
+/* SSO overlay */
+#sso-overlay {
+  display: none; position: fixed; inset: 0;
+  background: rgba(0,0,0,0.78); backdrop-filter: blur(5px);
+  z-index: 50; align-items: center; justify-content: center;
+}
+#sso-overlay.show { display: flex; }
+.sso-modal {
+  background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius);
+  padding: 40px 32px; text-align: center; max-width: 380px; width: calc(100% - 40px);
+}
+.sso-modal h3 { font-size: 16px; margin: 16px 0 8px; }
+.sso-modal p { font-size: 13px; color: var(--text-muted); margin-bottom: 18px; line-height: 1.5; }
+.sso-spinner {
+  width: 40px; height: 40px; border: 3px solid var(--border); border-top-color: var(--accent);
+  border-radius: 50%; animation: spin 0.8s linear infinite; margin: 0 auto;
+}
+.sso-link {
+  display: inline-block; font-size: 12px; color: var(--accent); text-decoration: none;
+  padding: 7px 14px; border: 1px solid rgba(88,166,255,0.4);
+  border-radius: var(--radius-sm); margin-bottom: 12px; transition: background 0.15s;
+}
+.sso-link:hover { background: var(--accent-dim); }
+.btn-cancel {
+  display: block; margin: 0 auto; padding: 6px 20px; border-radius: var(--radius-sm);
+  font-size: 12px; cursor: pointer; border: 1px solid var(--border);
+  background: transparent; color: var(--text-muted); transition: all 0.15s;
+}
+.btn-cancel:hover { border-color: var(--error); color: var(--error); }
+
+/* SSO form */
+.discover-row { display: flex; gap: 6px; align-items: flex-end; }
+.discover-row > div { flex: 1; }
+#sso-status-msg { font-size: 11px; min-height: 16px; }
+details summary { list-style: none; }
+details summary::-webkit-details-marker { display: none; }
+</style>
+</head>
+<body>
+<header>
+  <span style="font-size:18px">🔌</span>
+  <h1>MCP Server Tester</h1>
+  <span class="badge">v0.1</span>
+</header>
+
+<div class="layout">
+  <aside class="sidebar">
+    <div class="sidebar-inner">
+
+      <div>
+        <label>MCP Server URL</label>
+        <input id="url" type="url" placeholder="https://example.com/mcp" />
+      </div>
+
+      <div>
+        <label>Transport</label>
+        <select id="transport">
+          <option value="auto">Auto (Streamable HTTP → SSE)</option>
+          <option value="streamable_http">Streamable HTTP</option>
+          <option value="sse">SSE (Server-Sent Events)</option>
+        </select>
+      </div>
+
+      <div>
+        <label>Auth Method</label>
+        <div class="auth-tabs">
+          <button class="auth-tab active" data-type="none">None</button>
+          <button class="auth-tab" data-type="bearer">Bearer</button>
+          <button class="auth-tab" data-type="oauth2_cc">OAuth CC</button>
+          <button class="auth-tab" data-type="sso" title="OAuth2 Authorization Code + PKCE (browser SSO)">SSO</button>
+          <button class="auth-tab" data-type="header">Header</button>
+        </div>
+        <div class="auth-fields" id="auth-fields" style="margin-top:10px"></div>
+      </div>
+
+      <button class="btn btn-primary" id="connect-btn">Connect &amp; Fetch Tools</button>
+
+      <div class="divider"></div>
+
+      <!-- Token Counting -->
+      <div>
+        <div class="section-label" style="margin-bottom:10px">Token Counting</div>
+        <div class="count-mode-row">
+          <label class="radio-label">
+            <input type="radio" name="count-mode" value="estimate" id="mode-estimate" checked>
+            <span>Estimate</span>
+          </label>
+          <label class="radio-label">
+            <input type="radio" name="count-mode" value="api" id="mode-api">
+            <span>Claude API (accurate)</span>
+          </label>
+        </div>
+        <div id="api-settings" style="display:none">
+          <div>
+            <label>API Key</label>
+            <input id="api-key" type="password" placeholder="sk-ant-api03-..." autocomplete="off" />
+          </div>
+          <div>
+            <label>Model</label>
+            <select id="api-model">
+              <option value="claude-haiku-4-5-20251001">Claude Haiku 4.5 (fastest)</option>
+              <option value="claude-sonnet-4-6" selected>Claude Sonnet 4.6</option>
+              <option value="claude-opus-4-8">Claude Opus 4.8</option>
+            </select>
+          </div>
+        </div>
+      </div>
+
+      <div class="divider"></div>
+
+      <div>
+        <div class="section-label" style="margin-bottom:8px">Recent Connections</div>
+        <div class="history-list" id="history-list"></div>
+      </div>
+
+    </div>
+  </aside>
+
+  <main class="main" id="main">
+    <div class="empty-state">
+      <div class="icon">🔍</div>
+      <p>Enter an MCP server URL and click <strong>Connect &amp; Fetch Tools</strong></p>
+      <p style="margin-top:6px;font-size:12px;color:var(--text-dim)">Lists available tools and estimates token consumption per request</p>
+    </div>
+  </main>
+</div>
+
+<!-- SSO overlay -->
+<div id="sso-overlay">
+  <div class="sso-modal">
+    <div class="sso-spinner"></div>
+    <h3>Browser Authentication</h3>
+    <p>Complete the SSO login in the popup window.<br>The app will connect automatically when done.</p>
+    <a href="#" id="sso-open-link" class="sso-link">↗ Click here if popup didn't open</a>
+    <button class="btn-cancel" onclick="window._cancelSSO && window._cancelSSO()">Cancel</button>
+  </div>
+</div>
+
+<div id="copy-toast">Copied ✓</div>
+
+<script>
+// ── State ────────────────────────────────────────────────────────
+let currentTools = [];
+let maxTokens = 0;
+let tokenDisplayMode = 'estimate'; // 'estimate' | 'api'
+
+// ── Auth fields ──────────────────────────────────────────────────
+const AUTH_FIELDS = {
+  none: [],
+  bearer: [
+    { id: 'token', label: 'Bearer Token', type: 'password', placeholder: 'eyJ...' },
+  ],
+  oauth2_cc: [
+    { id: 'oauth_token_url',    label: 'Token Endpoint URL', type: 'url',      placeholder: 'https://auth.example.com/token' },
+    { id: 'oauth_client_id',    label: 'Client ID',          type: 'text',     placeholder: '' },
+    { id: 'oauth_client_secret',label: 'Client Secret',      type: 'password', placeholder: '' },
+    { id: 'oauth_scope',        label: 'Scope (optional)',   type: 'text',     placeholder: 'read write' },
+  ],
+  header: [
+    { id: 'header_name',  label: 'Header Name',  type: 'text',     placeholder: 'X-API-Key' },
+    { id: 'header_value', label: 'Header Value', type: 'password', placeholder: '' },
+  ],
+};
+
+let currentAuthType = 'none';
+
+document.querySelectorAll('.auth-tab').forEach(btn => {
+  btn.addEventListener('click', () => {
+    document.querySelectorAll('.auth-tab').forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
+    currentAuthType = btn.dataset.type;
+    renderAuthFields(currentAuthType);
+  });
+});
+
+function renderAuthFields(type) {
+  const c = document.getElementById('auth-fields');
+  c.innerHTML = '';
+  if (type === 'sso') { renderSSOFields(c); return; }
+  (AUTH_FIELDS[type] || []).forEach(f => {
+    const w = document.createElement('div');
+    w.innerHTML = `<label>${f.label}</label><input id="auth_${f.id}" type="${f.type}" placeholder="${f.placeholder}" />`;
+    c.appendChild(w);
+  });
+}
+
+function renderSSOFields(c) {
+  c.innerHTML = `
+    <div style="background:var(--surface2);border:1px solid var(--border);border-radius:var(--radius-sm);padding:10px 12px;font-size:12px;color:var(--text-muted);line-height:1.6">
+      OAuth config is <strong style="color:var(--text)">auto-discovered</strong> from the MCP server.
+      Client ID is obtained automatically via <strong style="color:var(--text)">Dynamic Client Registration</strong> (RFC 7591).
+    </div>
+    <div>
+      <label>Redirect URI <span style="color:var(--text-dim)">(auto-configured)</span></label>
+      <input id="sso_redirect_uri" value="${window.location.origin}/oauth/callback" readonly
+             style="opacity:0.55;cursor:default;font-family:monospace;font-size:11px" />
+    </div>
+    <details id="sso-advanced">
+      <summary style="cursor:pointer;font-size:12px;color:var(--text-muted);padding:4px 0;user-select:none">
+        ▶ Advanced Settings (override / fallback)
+      </summary>
+      <div style="display:flex;flex-direction:column;gap:10px;margin-top:10px">
+        <div><label>Authorization URL</label><input id="sso_auth_endpoint" type="url" placeholder="auto-discovered" /></div>
+        <div><label>Token Endpoint URL</label><input id="sso_token_endpoint" type="url" placeholder="auto-discovered" /></div>
+        <div><label>Client ID</label><input id="sso_client_id" type="text" placeholder="auto-registered via Dynamic Registration" /></div>
+        <div><label>Client Secret <span style="color:var(--text-dim)">(not required with PKCE)</span></label><input id="sso_client_secret" type="password" /></div>
+        <div><label>Scope <span style="color:var(--text-dim)">(optional)</span></label><input id="sso_scope" type="text" placeholder="openid profile email" /></div>
+      </div>
+    </details>
+    <div id="sso-status-msg"></div>`;
+}
+
+renderAuthFields('none');
+
+// ── Token counting mode ──────────────────────────────────────────
+document.querySelectorAll('input[name="count-mode"]').forEach(r => {
+  r.addEventListener('change', () => {
+    const isApi = document.getElementById('mode-api').checked;
+    document.getElementById('api-settings').style.display = isApi ? 'flex' : 'none';
+    if (isApi) {
+      const saved = localStorage.getItem('claude-api-key');
+      if (saved && !document.getElementById('api-key').value) document.getElementById('api-key').value = saved;
+    }
+  });
+});
+document.getElementById('api-key').addEventListener('input', e => {
+  if (e.target.value) localStorage.setItem('claude-api-key', e.target.value);
+});
+// Restore key on load
+const _savedKey = localStorage.getItem('claude-api-key');
+if (_savedKey) document.getElementById('api-key').value = _savedKey;
+
+// ── History ──────────────────────────────────────────────────────
+function loadHistory() { try { return JSON.parse(localStorage.getItem('mcp-history') || '[]'); } catch { return []; } }
+function saveHistory(url) {
+  let h = loadHistory().filter(u => u !== url);
+  h.unshift(url);
+  localStorage.setItem('mcp-history', JSON.stringify(h.slice(0, 8)));
+  renderHistory();
+}
+function renderHistory() {
+  const list = document.getElementById('history-list');
+  list.innerHTML = '';
+  loadHistory().forEach(url => {
+    const el = document.createElement('div');
+    el.className = 'history-item'; el.textContent = url; el.title = url;
+    el.addEventListener('click', () => { document.getElementById('url').value = url; });
+    list.appendChild(el);
+  });
+}
+renderHistory();
+
+// ── Connect ──────────────────────────────────────────────────────
+document.getElementById('connect-btn').addEventListener('click', handleConnect);
+document.getElementById('url').addEventListener('keydown', e => { if (e.key === 'Enter') handleConnect(); });
+
+async function handleConnect() {
+  const url = document.getElementById('url').value.trim();
+  if (!url) { showError('Please enter a URL'); return; }
+
+  const btn = document.getElementById('connect-btn');
+
+  if (currentAuthType === 'sso') { await handleSSOConnect(url, btn); return; }
+
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spinner"></span> Connecting...';
+  const auth = { type: currentAuthType };
+  (AUTH_FIELDS[currentAuthType] || []).forEach(f => {
+    const el = document.getElementById('auth_' + f.id);
+    if (el) auth[f.id] = el.value.trim();
+  });
+  try {
+    await doConnect(url, auth, document.getElementById('transport').value);
+  } catch (e) {
+    showError(e.message || 'Network error');
+  } finally {
+    btn.disabled = false;
+    btn.textContent = 'Connect & Fetch Tools';
+  }
+}
+
+async function doConnect(url, auth, transport) {
+  const t0 = performance.now();
+  const resp = await fetch('/api/connect', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ url, auth, transport }),
+  });
+  const data = await resp.json();
+  const roundtripMs = Math.round(performance.now() - t0);
+  if (!resp.ok || !data.success) {
+    showError(data.error || 'Connection failed', data.error_type);
+  } else {
+    saveHistory(url);
+    renderResults(data, roundtripMs);
+    if (document.getElementById('mode-api').checked && document.getElementById('api-key').value) {
+      setTimeout(countWithAPI, 200);
+    }
+  }
+}
+
+// ── SSO flow ─────────────────────────────────────────────────────
+async function handleSSOConnect(url, btn) {
+  const redirectUri = document.getElementById('sso_redirect_uri')?.value || `${window.location.origin}/oauth/callback`;
+  const body = {
+    mcp_url: url, redirect_uri: redirectUri,
+    auth_endpoint:  document.getElementById('sso_auth_endpoint')?.value.trim()  || '',
+    token_endpoint: document.getElementById('sso_token_endpoint')?.value.trim() || '',
+    client_id:      document.getElementById('sso_client_id')?.value.trim()      || '',
+    client_secret:  document.getElementById('sso_client_secret')?.value.trim()  || '',
+    scope:          document.getElementById('sso_scope')?.value.trim()           || '',
+  };
+
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spinner"></span> Discovering OAuth config...';
+  setSSOStatusMsg('');
+
+  try {
+    const startResp = await fetch('/api/oauth/start', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
+    });
+    const startData = await startResp.json();
+
+    if (!startResp.ok || !startData.success) {
+      if (startData.needs_client_id || startData.needs_manual)
+        document.getElementById('sso-advanced')?.setAttribute('open', '');
+      throw new Error(startData.error || 'OAuth start failed');
+    }
+
+    const { state, auth_url, dynamic_registration, issuer } = startData;
+    if (dynamic_registration)
+      setSSOStatusMsg(`✓ Client ID registered automatically${issuer ? ' · ' + escHtml(issuer) : ''}`);
+
+    const popup = window.open(auth_url, 'sso_login', 'width=620,height=720,left=300,top=80,scrollbars=yes,resizable=yes');
+    showSSOOverlay(auth_url, popup);
+    btn.textContent = 'SSO auth in progress...';
+
+    const token = await waitForSSOToken(state, popup);
+    hideSSOOverlay();
+    btn.innerHTML = '<span class="spinner"></span> Connecting to MCP...';
+    await doConnect(url, { type: 'bearer', token }, document.getElementById('transport').value);
+
+  } catch (e) {
+    hideSSOOverlay();
+    if (e !== 'cancelled') showError(typeof e === 'string' ? e : (e.message || 'SSO authentication failed'));
+  } finally {
+    btn.disabled = false;
+    btn.textContent = 'Connect & Fetch Tools';
+  }
+}
+
+function setSSOStatusMsg(msg) {
+  const el = document.getElementById('sso-status-msg');
+  if (el) el.innerHTML = msg ? `<span style="font-size:11px;color:var(--success)">${msg}</span>` : '';
+}
+
+function waitForSSOToken(state, popup) {
+  return new Promise((resolve, reject) => {
+    let done = false;
+    let pollTimer, popupTimer, timeoutTimer;
+    const cleanup = () => { done = true; clearInterval(pollTimer); clearInterval(popupTimer); clearTimeout(timeoutTimer); };
+    pollTimer = setInterval(async () => {
+      if (done) return;
+      try {
+        const d = await fetch(`/api/oauth/status/${state}`).then(r => r.json());
+        if (d.status === 'ready') { cleanup(); resolve(d.token); }
+        else if (d.status === 'error') { cleanup(); reject(d.error); }
+      } catch {}
+    }, 1000);
+    popupTimer = setInterval(() => {
+      if (done || !popup) return;
+      if (popup.closed) {
+        clearInterval(popupTimer);
+        setTimeout(async () => {
+          if (done) return;
+          try {
+            const d = await fetch(`/api/oauth/status/${state}`).then(r => r.json());
+            if (d.status === 'ready') { cleanup(); resolve(d.token); return; }
+          } catch {}
+          if (!done) { cleanup(); reject('cancelled'); }
+        }, 2000);
+      }
+    }, 500);
+    timeoutTimer = setTimeout(() => { if (!done) { cleanup(); reject('Authentication timed out (5 min)'); } }, 300000);
+    window._cancelSSO = () => { if (!done) { cleanup(); if (popup && !popup.closed) popup.close(); reject('cancelled'); } };
+  });
+}
+
+function showSSOOverlay(authUrl, popup) {
+  const link = document.getElementById('sso-open-link');
+  link.href = authUrl;
+  link.onclick = e => { e.preventDefault(); if (popup && !popup.closed) popup.focus(); else window.open(authUrl, 'sso_login', 'width=620,height=720,scrollbars=yes'); };
+  document.getElementById('sso-overlay').classList.add('show');
+}
+function hideSSOOverlay() { document.getElementById('sso-overlay').classList.remove('show'); }
+
+// ── Token counting (Claude API) ───────────────────────────────────
+async function countWithAPI() {
+  const apiKey = document.getElementById('api-key').value.trim();
+  if (!apiKey) {
+    document.getElementById('mode-api').checked = true;
+    document.getElementById('api-settings').style.display = 'flex';
+    document.getElementById('api-key').focus();
+    return;
+  }
+
+  const model  = document.getElementById('api-model').value;
+  const btn    = document.getElementById('count-api-btn');
+  const status = document.getElementById('count-api-status');
+
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spinner"></span> Counting...';
+  status.textContent = '';
+
+  const t0 = performance.now();
+  try {
+    const resp = await fetch('/api/count-tokens', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ tools: currentTools, api_key: apiKey, model }),
+    });
+    const data = await resp.json();
+    const elapsed = Math.round(performance.now() - t0);
+    if (!resp.ok || !data.success) throw new Error(data.error || 'Count failed');
+
+    applyAccurateTokens(data);
+    status.innerHTML = `<span style="color:var(--success)">✓ ${escHtml(data.model)} · ${fmtMs(elapsed)}</span>`;
+
+  } catch (e) {
+    status.innerHTML = `<span style="color:var(--error)">${escHtml(e.message)}</span>`;
+  } finally {
+    btn.disabled = false;
+    btn.textContent = 'Count with Claude API';
+  }
+}
+
+function applyAccurateTokens(data) {
+  // Store accurate counts in currentTools
+  data.per_tool_tokens.forEach((tok, i) => {
+    if (currentTools[i]) currentTools[i].accurate_tokens = tok;
+  });
+  tokenDisplayMode = 'api';
+  maxTokens = Math.max(...(data.per_tool_tokens.length ? data.per_tool_tokens : [1]));
+
+  // Update summary stats
+  const toolTok = document.getElementById('stat-tool-tokens');
+  const perReq  = document.getElementById('stat-per-request');
+  const modeBadge = document.getElementById('token-mode-badge');
+  if (toolTok) { toolTok.textContent = fmtNum(data.tool_tokens);          toolTok.className = 'stat-value success'; }
+  if (perReq)  { perReq.textContent  = fmtNum(data.total_input_tokens);   perReq.className  = 'stat-value ' + tokenClass(data.total_input_tokens); }
+  if (modeBadge) {
+    modeBadge.textContent = `Accurate · ${data.model}`;
+    modeBadge.className   = 'tok-mode-badge tok-mode-api';
+  }
+
+  // Re-render tool list with accurate tokens
+  const q = document.getElementById('tool-search')?.value || '';
+  filterTools(q);
+}
+
+// ── Render ───────────────────────────────────────────────────────
+function showError(msg, type) {
+  document.getElementById('main').innerHTML = `
+    <div class="alert alert-error">
+      <span>⚠️</span>
+      <div><strong>${type ? escHtml(type) + ': ' : ''}Connection Error</strong>
+      <pre style="margin-top:6px">${escHtml(msg)}</pre></div>
+    </div>`;
+}
+
+function renderResults(data, roundtripMs) {
+  currentTools    = data.tools;
+  tokenDisplayMode = 'estimate';
+  currentTools.forEach(t => delete t.accurate_tokens);
+  maxTokens = currentTools.reduce((m, t) => Math.max(m, t.estimated_tokens), 1);
+
+  const si = data.server_info || {};
+  const ts = data.token_summary;
+  const hasApiKey = !!document.getElementById('api-key').value.trim();
+
+  document.getElementById('main').innerHTML = `
+    <div class="card">
+      <div class="card-title">Server Info</div>
+      <div class="info-grid">
+        <span class="info-key">Name</span>       <span class="info-val">${escHtml(si.name || '—')}</span>
+        <span class="info-key">Version</span>    <span class="info-val">${escHtml(si.version || '—')}</span>
+        <span class="info-key">Protocol</span>   <span class="info-val">${escHtml(si.protocol_version || '—')}</span>
+        <span class="info-key">Transport</span>  <span class="info-val">${escHtml(data.transport_used || '—')}</span>
+      </div>
+      <div style="height:1px;background:var(--border);margin:10px 0"></div>
+      <div class="info-grid">
+        <span class="info-key">MCP fetch</span>
+        <span class="info-val" style="color:${timingColor(data.fetch_time_ms)}">${fmtMs(data.fetch_time_ms)}</span>
+        <span class="info-key">Roundtrip</span>
+        <span class="info-val" style="color:${timingColor(roundtripMs)}">${fmtMs(roundtripMs)}</span>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-title">Token Summary</div>
+      <div class="stats-grid">
+        <div class="stat">
+          <div class="stat-value accent" id="stat-tool-count">${data.tool_count}</div>
+          <div class="stat-label">Tools</div>
+        </div>
+        <div class="stat">
+          <div class="stat-value ${tokenClass(ts.tools_total)}" id="stat-tool-tokens">${fmtNum(ts.tools_total)}</div>
+          <div class="stat-label">Tool Tokens</div>
+        </div>
+        <div class="stat">
+          <div class="stat-value ${tokenClass(ts.per_request_estimate)}" id="stat-per-request">${fmtNum(ts.per_request_estimate)}</div>
+          <div class="stat-label">Est. per Request</div>
+        </div>
+      </div>
+      <div style="margin-top:10px;display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px">
+        <span class="tok-mode-badge tok-mode-est" id="token-mode-badge">Estimated (~4 chars/token)</span>
+        <div style="display:flex;align-items:center;gap:10px">
+          <button class="btn-count" id="count-api-btn" onclick="countWithAPI()">
+            Count with Claude API
+          </button>
+          <span id="count-api-status" style="font-size:11px"></span>
+        </div>
+      </div>
+      <div style="margin-top:12px;display:flex;gap:8px">
+        <button class="btn-sm" onclick="copyAllTools('claude')">Copy as Claude API format</button>
+        <button class="btn-sm" onclick="copyAllTools('mcp')">Copy as MCP format</button>
+      </div>
+    </div>
+
+    <div>
+      <div class="tools-header">
+        <div style="font-size:13px;font-weight:600">
+          Tools <span style="color:var(--text-muted);font-weight:400">(${data.tool_count})</span>
+        </div>
+        <input class="search-input" id="tool-search" placeholder="Search tools..." oninput="filterTools(this.value)" />
+      </div>
+      <div class="tools-list" id="tools-list"></div>
+    </div>`;
+
+  renderToolList(currentTools);
+}
+
+function renderToolList(tools) {
+  const list = document.getElementById('tools-list');
+  if (!list) return;
+  list.innerHTML = '';
+  tools.forEach((t, i) => list.appendChild(buildToolCard(t, i)));
+}
+
+function filterTools(q) {
+  const lq = q.toLowerCase();
+  renderToolList(q ? currentTools.filter(t => t.name.toLowerCase().includes(lq) || (t.description || '').toLowerCase().includes(lq)) : currentTools);
+}
+
+function buildToolCard(tool, idx) {
+  const isAccurate = tokenDisplayMode === 'api' && tool.accurate_tokens != null;
+  const tok        = isAccurate ? tool.accurate_tokens : tool.estimated_tokens;
+  const cls        = tok < 100 ? 'tok-low' : tok < 300 ? 'tok-med' : 'tok-high';
+  const apiCls     = isAccurate ? ' tok-api' : '';
+  const label      = isAccurate ? fmtNum(tok) : `~${fmtNum(tok)}`;
+  const barPct     = Math.round((tok / maxTokens) * 100);
+  const barColor   = tok < 100 ? 'var(--success)' : tok < 300 ? 'var(--warning)' : 'var(--error)';
+  const props      = tool.inputSchema?.properties || {};
+  const required   = tool.inputSchema?.required   || [];
+
+  const paramTags = Object.keys(props).map(k =>
+    `<span class="tag ${required.includes(k) ? 'required' : ''}">${escHtml(k)}</span>`
+  ).join('');
+
+  // Stable copy index: find in currentTools by name for accurate copy
+  const ciIdx = currentTools.indexOf(tool);
+
+  const card = document.createElement('div');
+  card.className = 'tool-card';
+  card.innerHTML = `
+    <div class="tool-header" onclick="toggleTool(this)">
+      <span class="tool-icon">🔧</span>
+      <span class="tool-name">${escHtml(tool.name)}</span>
+      <div class="tool-meta">
+        ${tool.param_count > 0 ? `<span class="param-badge">${tool.param_count} params</span>` : ''}
+        <span class="token-badge ${cls}${apiCls}">${label}</span>
+        <span class="chevron">▶</span>
+      </div>
+    </div>
+    <div class="token-bar-wrap" style="padding:0 14px 8px">
+      <div class="token-bar-bg"><div class="token-bar-fill" style="width:${barPct}%;background:${barColor}"></div></div>
+    </div>
+    <div class="tool-body">
+      <div class="tool-desc">${escHtml(tool.description)}</div>
+      ${paramTags ? `<div class="tags">${paramTags}</div>` : ''}
+      <div style="margin-top:10px">
+        <div class="schema-label">Input Schema</div>
+        <div class="json-block">${syntaxHighlight(tool.inputSchema)}</div>
+      </div>
+      <div class="tool-footer">
+        <button class="btn-sm" onclick="copyTool(${ciIdx},'claude')">Claude API</button>
+        <button class="btn-sm" onclick="copyTool(${ciIdx},'mcp')">MCP</button>
+      </div>
+    </div>`;
+  return card;
+}
+
+function toggleTool(header) {
+  const body = header.parentElement.querySelector('.tool-body');
+  if (!body) return;
+  const open = body.classList.toggle('open');
+  header.querySelector('.chevron').classList.toggle('open', open);
+}
+
+// ── Copy ─────────────────────────────────────────────────────────
+function toClaudeFormat(t) { return { name: t.name, description: t.description, input_schema: t.inputSchema }; }
+function toMcpFormat(t)    { return { name: t.name, description: t.description, inputSchema: t.inputSchema }; }
+function copyTool(idx, fmt) { copyText(JSON.stringify(fmt === 'claude' ? toClaudeFormat(currentTools[idx]) : toMcpFormat(currentTools[idx]), null, 2)); }
+function copyAllTools(fmt)  { copyText(JSON.stringify(currentTools.map(t => fmt === 'claude' ? toClaudeFormat(t) : toMcpFormat(t)), null, 2)); }
+function copyText(text) {
+  navigator.clipboard.writeText(text).then(() => {
+    const toast = document.getElementById('copy-toast');
+    toast.classList.add('show');
+    setTimeout(() => toast.classList.remove('show'), 2000);
+  });
+}
+
+// ── Helpers ──────────────────────────────────────────────────────
+function fmtMs(ms) {
+  if (ms == null) return '—';
+  if (ms >= 1000) return (ms / 1000).toFixed(2) + ' s';
+  return ms + ' ms';
+}
+function timingColor(ms) {
+  if (ms == null) return 'var(--text)';
+  if (ms < 500)  return 'var(--success)';
+  if (ms < 2000) return 'var(--warning)';
+  return 'var(--error)';
+}
+function escHtml(s) {
+  if (!s && s !== 0) return '';
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+function fmtNum(n) { return Number(n).toLocaleString(); }
+function tokenClass(n) { return n < 500 ? 'success' : n < 2000 ? 'warning' : 'accent'; }
+function syntaxHighlight(obj) {
+  if (!obj || Object.keys(obj).length === 0) return '<span style="color:var(--text-dim)">{}</span>';
+  return JSON.stringify(obj, null, 2)
+    .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
+    .replace(/"([^"]+)":/g,'<span style="color:#79c0ff">"$1"</span>:')
+    .replace(/: "([^"]*)"/g,': <span style="color:#a5d6ff">"$1"</span>')
+    .replace(/: (true|false)/g,': <span style="color:#ff7b72">$1</span>')
+    .replace(/: (\d+)/g,': <span style="color:#f2cc60">$1</span>');
+}
+</script>
+</body>
+</html>
