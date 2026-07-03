@@ -276,6 +276,67 @@ select option { background: var(--surface2); }
 details summary { list-style: none; }
 details summary::-webkit-details-marker { display: none; }
 
+/* Primitive tabs (Tools / Resources / Prompts) */
+.primitive-tabs { display: flex; gap: 2px; margin-bottom: 14px; border-bottom: 1px solid var(--border); }
+.ptab {
+  padding: 8px 16px; font-size: 13px; font-weight: 500; cursor: pointer; border: none;
+  background: transparent; color: var(--text-muted); border-bottom: 2px solid transparent;
+  margin-bottom: -1px; transition: color 0.15s, border-color 0.15s;
+}
+.ptab:hover { color: var(--text); }
+.ptab.active { color: var(--accent); border-bottom-color: var(--accent); }
+.ptab-count { font-size: 11px; color: var(--text-dim); margin-left: 4px; }
+.ptab.active .ptab-count { color: var(--accent); opacity: 0.7; }
+.tab-panel { display: none; }
+.tab-panel.active { display: block; }
+
+/* Resource card */
+.resource-card {
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: var(--radius); overflow: hidden; transition: border-color 0.15s; margin-bottom: 8px;
+}
+.resource-card:hover { border-color: #444c56; }
+.resource-header { display: flex; align-items: center; gap: 10px; padding: 10px 14px; cursor: pointer; user-select: none; }
+.resource-header:hover { background: var(--surface2); }
+.resource-icon { font-size: 14px; flex-shrink: 0; }
+.resource-name { font-weight: 600; font-family: monospace; font-size: 13px; flex: 1; }
+.mime-badge {
+  font-size: 10px; padding: 2px 6px; border-radius: 20px;
+  background: var(--surface2); color: var(--text-dim); border: 1px solid var(--border);
+}
+.resource-body { border-top: 1px solid var(--border); padding: 12px 14px; display: none; }
+.resource-body.open { display: block; }
+.resource-uri { font-family: monospace; font-size: 11px; color: var(--text-dim); word-break: break-all; margin-bottom: 8px; }
+.resource-desc { color: var(--text-muted); font-size: 13px; margin-bottom: 10px; line-height: 1.5; }
+.resource-desc:empty { display: none; }
+
+/* Prompt card */
+.prompt-card {
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: var(--radius); overflow: hidden; transition: border-color 0.15s; margin-bottom: 8px;
+}
+.prompt-card:hover { border-color: #444c56; }
+.prompt-header { display: flex; align-items: center; gap: 10px; padding: 10px 14px; cursor: pointer; user-select: none; }
+.prompt-header:hover { background: var(--surface2); }
+.prompt-icon { font-size: 14px; flex-shrink: 0; }
+.prompt-name { font-weight: 600; font-family: monospace; font-size: 13px; flex: 1; }
+.arg-count-badge { font-size: 11px; color: var(--text-dim); background: var(--surface2); padding: 2px 6px; border-radius: 20px; border: 1px solid var(--border); }
+.prompt-body { border-top: 1px solid var(--border); padding: 12px 14px; display: none; }
+.prompt-body.open { display: block; }
+.prompt-desc { color: var(--text-muted); font-size: 13px; margin-bottom: 10px; line-height: 1.5; }
+.prompt-desc:empty { display: none; }
+.prompt-args-form { display: flex; flex-direction: column; gap: 8px; margin-bottom: 10px; }
+
+/* Messages (prompt result) */
+.msg-list { display: flex; flex-direction: column; gap: 8px; margin-top: 10px; }
+.msg-item { border-radius: var(--radius-sm); padding: 8px 10px; font-size: 12px; line-height: 1.6; }
+.msg-user { background: var(--surface2); border: 1px solid var(--border); }
+.msg-assistant { background: var(--accent-dim); border: 1px solid rgba(88,166,255,0.25); }
+.msg-role { font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.08em; margin-bottom: 4px; }
+.msg-user .msg-role { color: var(--text-dim); }
+.msg-assistant .msg-role { color: var(--accent); }
+.msg-text { white-space: pre-wrap; color: var(--text); font-family: monospace; }
+
 /* Execute section */
 .exec-section { margin-top: 12px; border-top: 1px solid var(--border); padding-top: 12px; display: none; }
 .exec-section.open { display: block; }
@@ -419,9 +480,12 @@ details summary::-webkit-details-marker { display: none; }
 <script>
 // ── State ────────────────────────────────────────────────────────
 let currentTools = [];
+let currentResources = [];
+let currentPrompts = [];
 let maxTokens = 0;
 let tokenDisplayMode = 'estimate'; // 'estimate' | 'api'
 let currentConnection = null; // {url, auth, transport}
+let activeTab = 'tools';
 
 // ── Auth fields ──────────────────────────────────────────────────
 const AUTH_FIELDS = {
@@ -749,14 +813,16 @@ function showError(msg, type) {
 }
 
 function renderResults(data, roundtripMs) {
-  currentTools    = data.tools;
+  currentTools     = data.tools     || [];
+  currentResources = data.resources || [];
+  currentPrompts   = data.prompts   || [];
   tokenDisplayMode = 'estimate';
   currentTools.forEach(t => delete t.accurate_tokens);
   maxTokens = currentTools.reduce((m, t) => Math.max(m, t.estimated_tokens), 1);
+  activeTab = 'tools';
 
   const si = data.server_info || {};
   const ts = data.token_summary;
-  const hasApiKey = !!document.getElementById('api-key').value.trim();
 
   document.getElementById('main').innerHTML = `
     <div class="card">
@@ -808,19 +874,61 @@ function renderResults(data, roundtripMs) {
     </div>
 
     <div>
-      <div class="tools-header">
-        <div style="font-size:13px;font-weight:600">
-          Tools <span style="color:var(--text-muted);font-weight:400">(${data.tool_count})</span>
-        </div>
-        <div style="display:flex;align-items:center;gap:8px">
-          <button class="btn-sm" id="clear-all-btn" onclick="clearAllExecResults()" style="display:none;font-size:10px;padding:3px 9px">✕ Clear All Results</button>
-          <input class="search-input" id="tool-search" placeholder="Search tools..." oninput="filterTools(this.value)" />
-        </div>
+      <div class="primitive-tabs">
+        <button class="ptab active" data-tab="tools" onclick="switchTab('tools')">
+          Tools <span class="ptab-count">(${data.tool_count})</span>
+        </button>
+        <button class="ptab" data-tab="resources" onclick="switchTab('resources')">
+          Resources <span class="ptab-count">(${data.resource_count || 0})</span>
+        </button>
+        <button class="ptab" data-tab="prompts" onclick="switchTab('prompts')">
+          Prompts <span class="ptab-count">(${data.prompt_count || 0})</span>
+        </button>
       </div>
-      <div class="tools-list" id="tools-list"></div>
+
+      <div class="tab-panel active" id="tab-tools">
+        <div class="tools-header">
+          <div style="font-size:13px;font-weight:600">
+            Tools <span style="color:var(--text-muted);font-weight:400">(${data.tool_count})</span>
+          </div>
+          <div style="display:flex;align-items:center;gap:8px">
+            <button class="btn-sm" id="clear-all-btn" onclick="clearAllExecResults()" style="display:none;font-size:10px;padding:3px 9px">✕ Clear All Results</button>
+            <input class="search-input" id="tool-search" placeholder="Search tools..." oninput="filterTools(this.value)" />
+          </div>
+        </div>
+        <div class="tools-list" id="tools-list"></div>
+      </div>
+
+      <div class="tab-panel" id="tab-resources">
+        <div class="tools-header">
+          <div style="font-size:13px;font-weight:600">
+            Resources <span style="color:var(--text-muted);font-weight:400">(${data.resource_count || 0})</span>
+          </div>
+          <input class="search-input" id="resource-search" placeholder="Search resources..." oninput="filterResources(this.value)" />
+        </div>
+        <div id="resources-list"></div>
+      </div>
+
+      <div class="tab-panel" id="tab-prompts">
+        <div class="tools-header">
+          <div style="font-size:13px;font-weight:600">
+            Prompts <span style="color:var(--text-muted);font-weight:400">(${data.prompt_count || 0})</span>
+          </div>
+          <input class="search-input" id="prompt-search" placeholder="Search prompts..." oninput="filterPrompts(this.value)" />
+        </div>
+        <div id="prompts-list"></div>
+      </div>
     </div>`;
 
   renderToolList(currentTools);
+  renderResourceList(currentResources);
+  renderPromptList(currentPrompts);
+}
+
+function switchTab(tab) {
+  activeTab = tab;
+  document.querySelectorAll('.ptab').forEach(b => b.classList.toggle('active', b.dataset.tab === tab));
+  document.querySelectorAll('.tab-panel').forEach(p => p.classList.toggle('active', p.id === `tab-${tab}`));
 }
 
 function renderToolList(tools) {
@@ -833,6 +941,297 @@ function renderToolList(tools) {
 function filterTools(q) {
   const lq = q.toLowerCase();
   renderToolList(q ? currentTools.filter(t => t.name.toLowerCase().includes(lq) || (t.description || '').toLowerCase().includes(lq)) : currentTools);
+}
+
+// ── Resources ────────────────────────────────────────────────────
+function renderResourceList(resources) {
+  const list = document.getElementById('resources-list');
+  if (!list) return;
+  if (!resources.length) {
+    list.innerHTML = '<div class="empty-state"><div class="icon">📭</div><p>This server exposes no resources</p></div>';
+    return;
+  }
+  list.innerHTML = '';
+  resources.forEach((r, i) => list.appendChild(buildResourceCard(r, i)));
+}
+
+function filterResources(q) {
+  const lq = q.toLowerCase();
+  renderResourceList(q ? currentResources.filter(r =>
+    r.name.toLowerCase().includes(lq) || r.uri.toLowerCase().includes(lq) || (r.description || '').toLowerCase().includes(lq)
+  ) : currentResources);
+}
+
+function buildResourceCard(resource, idx) {
+  const card = document.createElement('div');
+  card.className = 'resource-card';
+  card.innerHTML = `
+    <div class="resource-header" onclick="toggleResource(this)">
+      <span class="resource-icon">📄</span>
+      <span class="resource-name">${escHtml(resource.name || resource.uri)}</span>
+      <div class="tool-meta">
+        ${resource.mimeType ? `<span class="mime-badge">${escHtml(resource.mimeType)}</span>` : ''}
+        <span class="chevron">▶</span>
+      </div>
+    </div>
+    <div class="resource-body">
+      <div class="resource-uri">${escHtml(resource.uri)}</div>
+      <div class="resource-desc">${escHtml(resource.description)}</div>
+      <div class="tool-footer">
+        <button class="btn-run" id="res-run-${idx}" onclick="readResource(${idx})">▶ Read</button>
+        <span id="res-status-${idx}" style="font-size:11px"></span>
+      </div>
+      <div class="exec-result" id="res-result-${idx}">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;margin-top:10px">
+          <span class="section-label">Contents</span>
+          <button class="btn-sm" onclick="clearResourceResult(${idx})" style="font-size:10px;padding:2px 8px">✕ Clear</button>
+        </div>
+        <div id="res-result-content-${idx}"></div>
+      </div>
+    </div>`;
+  return card;
+}
+
+function toggleResource(header) {
+  const body = header.parentElement.querySelector('.resource-body');
+  if (!body) return;
+  const open = body.classList.toggle('open');
+  header.querySelector('.chevron').classList.toggle('open', open);
+}
+
+async function readResource(idx) {
+  if (!currentConnection) { alert('Please connect to an MCP server first.'); return; }
+  const resource = currentResources[idx];
+  const runBtn   = document.getElementById(`res-run-${idx}`);
+  const statusEl = document.getElementById(`res-status-${idx}`);
+  runBtn.disabled = true;
+  runBtn.innerHTML = '<span class="spinner"></span>';
+  statusEl.textContent = '';
+
+  const t0 = performance.now();
+  try {
+    const resp = await fetch('/api/resources/read', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        url: currentConnection.url,
+        auth: currentConnection.auth,
+        transport: currentConnection.transport,
+        resource_uri: resource.uri,
+      }),
+    });
+    const data = await resp.json();
+    const elapsed = Math.round(performance.now() - t0);
+    if (!resp.ok || !data.success) throw new Error(data.error || 'Read failed');
+
+    renderResourceResult(idx, data, elapsed);
+    statusEl.innerHTML = `<span style="color:var(--success)">✓ server: ${fmtMs(data.exec_time_ms)} · roundtrip: ${fmtMs(elapsed)}</span>`;
+  } catch (e) {
+    statusEl.innerHTML = `<span style="color:var(--error)">${escHtml(e.message)}</span>`;
+  } finally {
+    runBtn.disabled = false;
+    runBtn.innerHTML = '▶ Read';
+  }
+}
+
+function renderResourceResult(idx, data, elapsed) {
+  const contentEl = document.getElementById(`res-result-content-${idx}`);
+  const resultEl  = document.getElementById(`res-result-${idx}`);
+  if (!contentEl || !resultEl) return;
+
+  let html = '';
+  for (const item of data.contents) {
+    if (item.type === 'text') {
+      let display = item.text;
+      try { display = JSON.stringify(JSON.parse(item.text), null, 2); } catch {}
+      html += `<div class="result-block">${escHtml(display)}</div>`;
+    } else if (item.type === 'blob') {
+      const mime = item.mimeType || '';
+      if (mime.startsWith('image/') && !mime.includes('svg')) {
+        html += `<img src="data:${escHtml(mime)};base64,${escHtml(item.blob)}" style="max-width:100%;border-radius:4px;margin-top:4px" />`;
+      } else {
+        html += `<div class="result-block" style="color:var(--text-dim);font-style:italic">Binary blob · ${escHtml(mime || 'unknown type')}</div>`;
+      }
+    } else {
+      html += `<div class="result-block">${syntaxHighlight(item)}</div>`;
+    }
+  }
+  if (!html) html = '<div style="color:var(--text-dim);font-size:12px;font-style:italic">(empty response)</div>';
+
+  contentEl.innerHTML = html;
+  resultEl.classList.add('show');
+}
+
+function clearResourceResult(idx) {
+  const resultEl  = document.getElementById(`res-result-${idx}`);
+  const contentEl = document.getElementById(`res-result-content-${idx}`);
+  const statusEl  = document.getElementById(`res-status-${idx}`);
+  if (resultEl)  resultEl.classList.remove('show');
+  if (contentEl) contentEl.innerHTML = '';
+  if (statusEl)  statusEl.textContent = '';
+}
+
+// ── Prompts ──────────────────────────────────────────────────────
+function renderPromptList(prompts) {
+  const list = document.getElementById('prompts-list');
+  if (!list) return;
+  if (!prompts.length) {
+    list.innerHTML = '<div class="empty-state"><div class="icon">💬</div><p>This server exposes no prompts</p></div>';
+    return;
+  }
+  list.innerHTML = '';
+  prompts.forEach((p, i) => list.appendChild(buildPromptCard(p, i)));
+}
+
+function filterPrompts(q) {
+  const lq = q.toLowerCase();
+  renderPromptList(q ? currentPrompts.filter(p =>
+    p.name.toLowerCase().includes(lq) || (p.description || '').toLowerCase().includes(lq)
+  ) : currentPrompts);
+}
+
+function buildPromptCard(prompt, idx) {
+  const args = prompt.arguments || [];
+  const argTags = args.map(a =>
+    `<span class="tag ${a.required ? 'required' : ''}">${escHtml(a.name)}${a.required ? ' *' : ''}</span>`
+  ).join('');
+
+  let formHtml = '';
+  if (args.length) {
+    formHtml = '<div class="prompt-args-form">';
+    for (const arg of args) {
+      const iid = `prompt-${idx}-arg-${escHtml(arg.name)}`;
+      formHtml += `<div>
+        <div style="font-size:11px;margin-bottom:3px">
+          <span style="color:var(--text-muted);font-weight:500">${escHtml(arg.name)}</span>${arg.required ? '<span style="color:var(--warning)"> *</span>' : ''}
+        </div>
+        ${arg.description ? `<div style="font-size:10px;color:var(--text-dim);margin-bottom:3px">${escHtml(arg.description)}</div>` : ''}
+        <input type="text" id="${iid}" class="exec-input" placeholder="${escHtml(arg.description || arg.name)}" />
+      </div>`;
+    }
+    formHtml += '</div>';
+  }
+
+  const card = document.createElement('div');
+  card.className = 'prompt-card';
+  card.innerHTML = `
+    <div class="prompt-header" onclick="togglePrompt(this)">
+      <span class="prompt-icon">💬</span>
+      <span class="prompt-name">${escHtml(prompt.name)}</span>
+      <div class="tool-meta">
+        ${args.length ? `<span class="arg-count-badge">${args.length} arg${args.length > 1 ? 's' : ''}</span>` : ''}
+        <span class="chevron">▶</span>
+      </div>
+    </div>
+    <div class="prompt-body">
+      <div class="prompt-desc">${escHtml(prompt.description)}</div>
+      ${argTags ? `<div class="tags" style="margin-bottom:10px">${argTags}</div>` : ''}
+      ${formHtml}
+      <div style="display:flex;align-items:center;gap:8px;margin-top:${args.length ? '8px' : '0'}">
+        <button class="btn-run" id="prompt-run-${idx}" onclick="getPrompt(${idx})">▶ Get Prompt</button>
+        <span id="prompt-status-${idx}" style="font-size:11px"></span>
+      </div>
+      <div class="exec-result" id="prompt-result-${idx}">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;margin-top:10px">
+          <span class="section-label">Messages</span>
+          <button class="btn-sm" onclick="clearPromptResult(${idx})" style="font-size:10px;padding:2px 8px">✕ Clear</button>
+        </div>
+        <div id="prompt-result-content-${idx}"></div>
+      </div>
+    </div>`;
+  return card;
+}
+
+function togglePrompt(header) {
+  const body = header.parentElement.querySelector('.prompt-body');
+  if (!body) return;
+  const open = body.classList.toggle('open');
+  header.querySelector('.chevron').classList.toggle('open', open);
+}
+
+async function getPrompt(idx) {
+  if (!currentConnection) { alert('Please connect to an MCP server first.'); return; }
+  const prompt = currentPrompts[idx];
+  const args   = prompt.arguments || [];
+  const promptArgs = {};
+
+  for (const arg of args) {
+    const el = document.getElementById(`prompt-${idx}-arg-${arg.name}`);
+    if (!el) continue;
+    const val = el.value.trim();
+    if (val) {
+      promptArgs[arg.name] = val;
+    } else if (arg.required) {
+      alert(`Required argument: "${arg.name}"`);
+      return;
+    }
+  }
+
+  const runBtn   = document.getElementById(`prompt-run-${idx}`);
+  const statusEl = document.getElementById(`prompt-status-${idx}`);
+  runBtn.disabled = true;
+  runBtn.innerHTML = '<span class="spinner"></span>';
+  statusEl.textContent = '';
+
+  const t0 = performance.now();
+  try {
+    const resp = await fetch('/api/prompts/get', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        url: currentConnection.url,
+        auth: currentConnection.auth,
+        transport: currentConnection.transport,
+        prompt_name: prompt.name,
+        prompt_args: promptArgs,
+      }),
+    });
+    const data = await resp.json();
+    const elapsed = Math.round(performance.now() - t0);
+    if (!resp.ok || !data.success) throw new Error(data.error || 'Get prompt failed');
+
+    renderPromptResult(idx, data, elapsed);
+    statusEl.innerHTML = `<span style="color:var(--success)">✓ server: ${fmtMs(data.exec_time_ms)} · roundtrip: ${fmtMs(elapsed)}</span>`;
+  } catch (e) {
+    statusEl.innerHTML = `<span style="color:var(--error)">${escHtml(e.message)}</span>`;
+  } finally {
+    runBtn.disabled = false;
+    runBtn.innerHTML = '▶ Get Prompt';
+  }
+}
+
+function renderPromptResult(idx, data, elapsed) {
+  const contentEl = document.getElementById(`prompt-result-content-${idx}`);
+  const resultEl  = document.getElementById(`prompt-result-${idx}`);
+  if (!contentEl || !resultEl) return;
+
+  let html = '';
+  for (const msg of data.messages) {
+    const isUser = msg.role === 'user';
+    const cls = isUser ? 'msg-user' : 'msg-assistant';
+    let body = '';
+    if (msg.type === 'text') {
+      body = `<div class="msg-text">${escHtml(msg.text)}</div>`;
+    } else if (msg.type === 'image' && msg.mimeType && !msg.mimeType.includes('svg')) {
+      body = `<img src="data:${escHtml(msg.mimeType)};base64,${escHtml(msg.data)}" style="max-width:100%;border-radius:4px" />`;
+    } else {
+      body = `<div class="msg-text">${syntaxHighlight(msg)}</div>`;
+    }
+    html += `<div class="msg-item ${cls}"><div class="msg-role">${escHtml(msg.role)}</div>${body}</div>`;
+  }
+  if (!html) html = '<div style="color:var(--text-dim);font-size:12px;font-style:italic">(no messages)</div>';
+
+  contentEl.innerHTML = `<div class="msg-list">${html}</div>`;
+  resultEl.classList.add('show');
+}
+
+function clearPromptResult(idx) {
+  const resultEl  = document.getElementById(`prompt-result-${idx}`);
+  const contentEl = document.getElementById(`prompt-result-content-${idx}`);
+  const statusEl  = document.getElementById(`prompt-status-${idx}`);
+  if (resultEl)  resultEl.classList.remove('show');
+  if (contentEl) contentEl.innerHTML = '';
+  if (statusEl)  statusEl.textContent = '';
 }
 
 function buildToolCard(tool, idx) {

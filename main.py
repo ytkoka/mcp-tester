@@ -88,6 +88,21 @@ class ExecuteRequest(BaseModel):
     tool_args: dict = {}
 
 
+class ReadResourceRequest(BaseModel):
+    url: str
+    auth: AuthConfig = AuthConfig()
+    transport: str = "auto"
+    resource_uri: str
+
+
+class GetPromptRequest(BaseModel):
+    url: str
+    auth: AuthConfig = AuthConfig()
+    transport: str = "auto"
+    prompt_name: str
+    prompt_args: dict[str, str] = {}
+
+
 def estimate_tokens(text: str) -> int:
     return max(1, len(text) // 4)
 
@@ -144,28 +159,81 @@ def tool_to_dict(tool: Any) -> dict[str, Any]:
     }
 
 
-async def _connect_streamable(url: str, headers: dict) -> tuple[list, dict]:
-    tools, info = [], {}
+def resource_to_dict(resource: Any) -> dict[str, Any]:
+    return {
+        "uri": str(getattr(resource, "uri", "")),
+        "name": getattr(resource, "name", "") or "",
+        "description": getattr(resource, "description", "") or "",
+        "mimeType": getattr(resource, "mimeType", "") or "",
+    }
+
+
+def prompt_to_dict(prompt: Any) -> dict[str, Any]:
+    args = []
+    for a in (getattr(prompt, "arguments", None) or []):
+        args.append({
+            "name": getattr(a, "name", ""),
+            "description": getattr(a, "description", "") or "",
+            "required": bool(getattr(a, "required", False)),
+        })
+    return {
+        "name": getattr(prompt, "name", ""),
+        "description": getattr(prompt, "description", "") or "",
+        "arguments": args,
+    }
+
+
+async def _list_primitives(session: ClientSession, caps: Any) -> tuple[list, list, list]:
+    """List only the primitives the server advertised in its initialize capabilities.
+
+    Gating on caps prevents calling list_resources/list_prompts on servers that
+    do not support them — those servers may hang indefinitely instead of returning
+    a JSON-RPC error, which would exhaust the outer connect timeout.
+
+    tools: called when caps is absent (old server) OR caps.tools is present.
+    resources/prompts: called only when explicitly advertised.
+    """
+    tools, resources, prompts = [], [], []
+    if caps is None or getattr(caps, "tools", None) is not None:
+        try:
+            tools = [tool_to_dict(t) for t in (await session.list_tools()).tools]
+        except Exception:
+            pass
+    if caps is not None and getattr(caps, "resources", None) is not None:
+        try:
+            resources = [resource_to_dict(r) for r in (await session.list_resources()).resources]
+        except Exception:
+            pass
+    if caps is not None and getattr(caps, "prompts", None) is not None:
+        try:
+            prompts = [prompt_to_dict(p) for p in (await session.list_prompts()).prompts]
+        except Exception:
+            pass
+    return tools, resources, prompts
+
+
+async def _connect_streamable(url: str, headers: dict) -> tuple[list, list, list, dict]:
+    tools, resources, prompts, info = [], [], [], {}
     async with streamablehttp_client(url, headers=headers) as (read, write, _):
         async with ClientSession(read, write) as session:
             result = await session.initialize()
             if result.serverInfo:
                 info = {"name": result.serverInfo.name, "version": result.serverInfo.version}
             info["protocol_version"] = str(result.protocolVersion) if result.protocolVersion else "unknown"
-            tools = [tool_to_dict(t) for t in (await session.list_tools()).tools]
-    return tools, info
+            tools, resources, prompts = await _list_primitives(session, result.capabilities)
+    return tools, resources, prompts, info
 
 
-async def _connect_sse(url: str, headers: dict) -> tuple[list, dict]:
-    tools, info = [], {}
+async def _connect_sse(url: str, headers: dict) -> tuple[list, list, list, dict]:
+    tools, resources, prompts, info = [], [], [], {}
     async with sse_client(url, headers=headers) as (read, write):
         async with ClientSession(read, write) as session:
             result = await session.initialize()
             if result.serverInfo:
                 info = {"name": result.serverInfo.name, "version": result.serverInfo.version}
             info["protocol_version"] = str(result.protocolVersion) if result.protocolVersion else "unknown"
-            tools = [tool_to_dict(t) for t in (await session.list_tools()).tools]
-    return tools, info
+            tools, resources, prompts = await _list_primitives(session, result.capabilities)
+    return tools, resources, prompts, info
 
 
 def _serialize_content(result: Any) -> tuple[list[dict], bool]:
@@ -193,6 +261,52 @@ def _serialize_content(result: Any) -> tuple[list[dict], bool]:
                     pass
             items.append({"type": str(t) if t else "unknown", "raw": str(item)})
     return items, bool(getattr(result, "isError", False))
+
+
+def _serialize_resource_contents(result: Any) -> list[dict]:
+    items: list[dict] = []
+    for content in (getattr(result, "contents", None) or []):
+        entry: dict = {
+            "uri": str(getattr(content, "uri", "")),
+            "mimeType": getattr(content, "mimeType", "") or "",
+        }
+        text = getattr(content, "text", None)
+        blob = getattr(content, "blob", None)
+        if text is not None:
+            entry["type"] = "text"
+            entry["text"] = text
+        elif blob is not None:
+            entry["type"] = "blob"
+            entry["blob"] = blob
+        else:
+            entry["type"] = "unknown"
+        items.append(entry)
+    return items
+
+
+def _serialize_prompt_messages(result: Any) -> list[dict]:
+    messages: list[dict] = []
+    for msg in (getattr(result, "messages", None) or []):
+        role = str(getattr(msg, "role", "user"))
+        content = getattr(msg, "content", None)
+        t = getattr(content, "type", None)
+        if t == "text":
+            messages.append({"role": role, "type": "text", "text": getattr(content, "text", "") or ""})
+        elif t == "image":
+            messages.append({
+                "role": role, "type": "image",
+                "data": getattr(content, "data", "") or "",
+                "mimeType": getattr(content, "mimeType", "") or "",
+            })
+        elif content is not None:
+            if hasattr(content, "model_dump"):
+                try:
+                    messages.append({"role": role, **content.model_dump()})
+                    continue
+                except Exception:
+                    pass
+            messages.append({"role": role, "type": str(t) if t else "unknown", "raw": str(content)})
+    return messages
 
 
 async def _exec_streamable(url: str, headers: dict, tool_name: str, tool_args: dict) -> Any:
@@ -228,28 +342,94 @@ async def call_tool_on_server(url: str, headers: dict, transport: str, tool_name
         raise RuntimeError(f"Both transports failed.\n• Streamable HTTP: {err_s}\n• SSE: {e}")
 
 
-async def connect_and_get_tools(url: str, headers: dict, transport: str) -> tuple[list, dict, str]:
+async def _exec_read_resource_streamable(url: str, headers: dict, resource_uri: str) -> Any:
+    async with streamablehttp_client(url, headers=headers) as (read, write, _):
+        async with ClientSession(read, write) as session:
+            await session.initialize()
+            return await session.read_resource(resource_uri)
+
+
+async def _exec_read_resource_sse(url: str, headers: dict, resource_uri: str) -> Any:
+    async with sse_client(url, headers=headers) as (read, write):
+        async with ClientSession(read, write) as session:
+            await session.initialize()
+            return await session.read_resource(resource_uri)
+
+
+async def call_read_resource_on_server(url: str, headers: dict, transport: str, resource_uri: str) -> tuple[Any, str]:
+    timeout = 30.0
+    if transport == "streamable_http":
+        return await asyncio.wait_for(_exec_read_resource_streamable(url, headers, resource_uri), timeout), "streamable_http"
+    if transport == "sse":
+        return await asyncio.wait_for(_exec_read_resource_sse(url, headers, resource_uri), timeout), "sse"
+    err_s = ""
+    try:
+        res = await asyncio.wait_for(_exec_read_resource_streamable(url, headers, resource_uri), timeout)
+        return res, "streamable_http"
+    except Exception as e:
+        err_s = str(e)
+    try:
+        res = await asyncio.wait_for(_exec_read_resource_sse(url, headers, resource_uri), timeout)
+        return res, "sse"
+    except Exception as e:
+        raise RuntimeError(f"Both transports failed.\n• Streamable HTTP: {err_s}\n• SSE: {e}")
+
+
+async def _exec_get_prompt_streamable(url: str, headers: dict, prompt_name: str, prompt_args: dict) -> Any:
+    async with streamablehttp_client(url, headers=headers) as (read, write, _):
+        async with ClientSession(read, write) as session:
+            await session.initialize()
+            return await session.get_prompt(prompt_name, prompt_args or None)
+
+
+async def _exec_get_prompt_sse(url: str, headers: dict, prompt_name: str, prompt_args: dict) -> Any:
+    async with sse_client(url, headers=headers) as (read, write):
+        async with ClientSession(read, write) as session:
+            await session.initialize()
+            return await session.get_prompt(prompt_name, prompt_args or None)
+
+
+async def call_get_prompt_on_server(url: str, headers: dict, transport: str, prompt_name: str, prompt_args: dict) -> tuple[Any, str]:
+    timeout = 30.0
+    if transport == "streamable_http":
+        return await asyncio.wait_for(_exec_get_prompt_streamable(url, headers, prompt_name, prompt_args), timeout), "streamable_http"
+    if transport == "sse":
+        return await asyncio.wait_for(_exec_get_prompt_sse(url, headers, prompt_name, prompt_args), timeout), "sse"
+    err_s = ""
+    try:
+        res = await asyncio.wait_for(_exec_get_prompt_streamable(url, headers, prompt_name, prompt_args), timeout)
+        return res, "streamable_http"
+    except Exception as e:
+        err_s = str(e)
+    try:
+        res = await asyncio.wait_for(_exec_get_prompt_sse(url, headers, prompt_name, prompt_args), timeout)
+        return res, "sse"
+    except Exception as e:
+        raise RuntimeError(f"Both transports failed.\n• Streamable HTTP: {err_s}\n• SSE: {e}")
+
+
+async def connect_and_list_primitives(url: str, headers: dict, transport: str) -> tuple[list, list, list, dict, str]:
     timeout = 30.0
 
     if transport == "streamable_http":
-        tools, info = await asyncio.wait_for(_connect_streamable(url, headers), timeout)
-        return tools, info, "streamable_http"
+        tools, resources, prompts, info = await asyncio.wait_for(_connect_streamable(url, headers), timeout)
+        return tools, resources, prompts, info, "streamable_http"
 
     if transport == "sse":
-        tools, info = await asyncio.wait_for(_connect_sse(url, headers), timeout)
-        return tools, info, "sse"
+        tools, resources, prompts, info = await asyncio.wait_for(_connect_sse(url, headers), timeout)
+        return tools, resources, prompts, info, "sse"
 
     # auto: try streamable first, fall back to SSE
     err_streamable = ""
     try:
-        tools, info = await asyncio.wait_for(_connect_streamable(url, headers), timeout)
-        return tools, info, "streamable_http"
+        tools, resources, prompts, info = await asyncio.wait_for(_connect_streamable(url, headers), timeout)
+        return tools, resources, prompts, info, "streamable_http"
     except Exception as e:
         err_streamable = str(e)
 
     try:
-        tools, info = await asyncio.wait_for(_connect_sse(url, headers), timeout)
-        return tools, info, "sse"
+        tools, resources, prompts, info = await asyncio.wait_for(_connect_sse(url, headers), timeout)
+        return tools, resources, prompts, info, "sse"
     except Exception as e:
         raise RuntimeError(
             f"Both transports failed.\n"
@@ -658,7 +838,7 @@ async def connect_to_mcp(req: ConnectRequest):
         headers = await build_headers(req.auth)
 
         t0 = time.perf_counter()
-        tools_raw, server_info, transport_used = await connect_and_get_tools(
+        tools_raw, resources_raw, prompts_raw, server_info, transport_used = await connect_and_list_primitives(
             req.url, headers, req.transport
         )
         fetch_ms = round((time.perf_counter() - t0) * 1000)
@@ -686,6 +866,10 @@ async def connect_to_mcp(req: ConnectRequest):
             "server_info": server_info,
             "tool_count": len(tools),
             "tools": tools,
+            "resource_count": len(resources_raw),
+            "resources": resources_raw,
+            "prompt_count": len(prompts_raw),
+            "prompts": prompts_raw,
             "token_summary": {
                 "tools_total": total_tokens,
                 "overhead": 50,
@@ -720,6 +904,57 @@ async def execute_tool_api(req: ExecuteRequest):
         }
     except Exception as e:
         logger.exception("Tool execution failed")
+        return JSONResponse(
+            status_code=400,
+            content={"success": False, "error": str(e), "error_type": type(e).__name__},
+        )
+
+
+@app.post("/api/resources/read")
+async def read_resource_api(req: ReadResourceRequest):
+    try:
+        headers = await build_headers(req.auth)
+        t0 = time.perf_counter()
+        result, transport_used = await call_read_resource_on_server(
+            req.url, headers, req.transport, req.resource_uri
+        )
+        exec_ms = round((time.perf_counter() - t0) * 1000)
+        contents = _serialize_resource_contents(result)
+        return {
+            "success": True,
+            "uri": req.resource_uri,
+            "contents": contents,
+            "exec_time_ms": exec_ms,
+            "transport_used": transport_used,
+        }
+    except Exception as e:
+        logger.exception("Resource read failed")
+        return JSONResponse(
+            status_code=400,
+            content={"success": False, "error": str(e), "error_type": type(e).__name__},
+        )
+
+
+@app.post("/api/prompts/get")
+async def get_prompt_api(req: GetPromptRequest):
+    try:
+        headers = await build_headers(req.auth)
+        t0 = time.perf_counter()
+        result, transport_used = await call_get_prompt_on_server(
+            req.url, headers, req.transport, req.prompt_name, req.prompt_args
+        )
+        exec_ms = round((time.perf_counter() - t0) * 1000)
+        messages = _serialize_prompt_messages(result)
+        return {
+            "success": True,
+            "prompt_name": req.prompt_name,
+            "description": getattr(result, "description", "") or "",
+            "messages": messages,
+            "exec_time_ms": exec_ms,
+            "transport_used": transport_used,
+        }
+    except Exception as e:
+        logger.exception("Prompt get failed")
         return JSONResponse(
             status_code=400,
             content={"success": False, "error": str(e), "error_type": type(e).__name__},

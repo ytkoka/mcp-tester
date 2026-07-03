@@ -1,7 +1,7 @@
 # MCP Server Tester
 
 A web-based tool for inspecting [Model Context Protocol (MCP)](https://modelcontextprotocol.io) servers.  
-Connect to any MCP server, browse its tools, measure fetch latency, and estimate (or accurately count) how many tokens those tools consume in a Claude API request.
+Connect to any MCP server, browse its **Tools, Resources, and Prompts**, measure fetch latency, and estimate (or accurately count) how many tokens those tools consume in a Claude API request.
 
 ---
 
@@ -10,6 +10,8 @@ Connect to any MCP server, browse its tools, measure fetch latency, and estimate
 | Feature | Details |
 |---------|---------|
 | **Tool inspection** | Lists all tools with name, description, parameter breakdown, and input schema |
+| **Resource inspection** | Lists all resources with URI, name, mimeType; read any resource to view its contents |
+| **Prompt inspection** | Lists all prompts with arguments; fill in arguments and render the prompt messages |
 | **Token estimation** | Estimates input tokens per Claude API request (~4 chars/token heuristic) |
 | **Accurate token counting** | Calls `POST /v1/messages/count_tokens` with your Anthropic API key for exact counts |
 | **Fetch timing** | Shows MCP server fetch time and total client roundtrip time |
@@ -90,23 +92,52 @@ Open **http://localhost:8080** in your browser.
 3. Select an **Auth Method** and fill in credentials (see below)
 4. Click **Connect & Fetch Tools**
 
+On connect, the tool simultaneously fetches **Tools, Resources, and Prompts** from the server.  
+Primitives not supported by the server simply show an empty state — no error is raised.
+
 The **Server Info** card shows the server name, protocol version, transport used, and timing:
 
-- **MCP fetch** — time the backend spent connecting and listing tools  
-- **Roundtrip** — total elapsed time from the browser click to the displayed result  
+- **MCP fetch** — time the backend spent connecting and listing all primitives
+- **Roundtrip** — total elapsed time from the browser click to the displayed result
 
 Color coding: green < 500 ms · yellow < 2 s · red ≥ 2 s
 
-### 2 — Browse tools
+### 2 — Browse Tools
 
-Each tool card shows:
+Switch to the **Tools** tab. Each tool card shows:
 - Tool name and parameter count
 - Estimated (or accurate) token cost badge, with a color-coded bar relative to the heaviest tool
 - Expandable view with description, parameter tags (required ones are highlighted), and the full input schema
+- **▶ Execute** section to call the tool and view the result inline
 
 Use the **Search tools…** box to filter by name or description.
 
-### 3 — Token counting
+### 3 — Browse Resources
+
+Switch to the **Resources** tab. Each resource card shows:
+- Resource name and URI
+- MIME type badge (if provided)
+- Description
+- **▶ Read** button — fetches the resource contents from the server and displays them inline
+  - Text content is pretty-printed as JSON when parseable
+  - Binary image blobs are rendered as `<img>` elements
+  - Other binary content shows a type summary
+
+Use the **Search resources…** box to filter by name, URI, or description.
+
+### 4 — Browse Prompts
+
+Switch to the **Prompts** tab. Each prompt card shows:
+- Prompt name and argument count
+- Description and argument tags (required ones are highlighted)
+- Input form auto-generated from the argument list — one text field per argument
+- **▶ Get Prompt** button — calls the server with the supplied arguments and renders the returned message list
+
+Messages are displayed in a conversation view with **user** / **assistant** role labels.
+
+Use the **Search prompts…** box to filter by name or description.
+
+### 5 — Token counting
 
 **Estimate mode** (default)  
 Uses `~4 chars / token` as a rough approximation. The badge shows `~N`.
@@ -121,7 +152,7 @@ After connecting, click **Count with Claude API**. The tool makes two parallel c
 > **Note:** Per-tool counts are proportionally scaled from the accurate total.  
 > The total figure is exact; individual tool figures are an approximation within that total.
 
-### 4 — Copy tool definitions
+### 6 — Copy tool definitions
 
 In the Token Summary card or on each tool card:
 - **Copy as Claude API format** — uses `input_schema` key, ready for `anthropic.messages.create(tools=[…])`
@@ -186,7 +217,10 @@ mcp-tester/
 | Method | Path | Description |
 |--------|------|-------------|
 | `GET`  | `/` | Serves the UI |
-| `POST` | `/api/connect` | Connects to an MCP server and returns tools + timing |
+| `POST` | `/api/connect` | Connects and lists Tools, Resources, and Prompts |
+| `POST` | `/api/execute` | Calls a tool and returns its result |
+| `POST` | `/api/resources/read` | Reads a resource by URI |
+| `POST` | `/api/prompts/get` | Gets a rendered prompt with supplied arguments |
 | `POST` | `/api/count-tokens` | Calls Claude API to count tokens accurately |
 | `POST` | `/api/oauth/start` | Starts an SSO flow (discovery + registration + PKCE) |
 | `GET`  | `/oauth/callback` | Receives the OAuth authorization code |
