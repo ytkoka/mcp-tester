@@ -1,7 +1,7 @@
 # MCP Server Tester
 
 A web-based tool for inspecting [Model Context Protocol (MCP)](https://modelcontextprotocol.io) servers.  
-Connect to any MCP server, browse its **Tools, Resources, and Prompts**, measure fetch latency, and estimate (or accurately count) how many tokens those tools consume in a Claude API request.
+Connect to any MCP server, browse its **Tools, Resources, and Prompts**, measure fetch latency, estimate token usage, and **compare two servers side by side**.
 
 ---
 
@@ -15,6 +15,7 @@ Connect to any MCP server, browse its **Tools, Resources, and Prompts**, measure
 | **Token estimation** | Estimates input tokens per Claude API request (~4 chars/token heuristic) |
 | **Accurate token counting** | Calls `POST /v1/messages/count_tokens` with your Anthropic API key for exact counts |
 | **Fetch timing** | Shows MCP server fetch time and total client roundtrip time |
+| **Compare Mode** | Connects to two servers in parallel and compares performance, tokens, and documentation quality |
 | **Multiple auth methods** | None · Bearer Token · OAuth2 Client Credentials · SSO (Authorization Code + PKCE) · Custom Header |
 | **SSO auto-discovery** | Discovers OAuth endpoints from `/.well-known/oauth-authorization-server` and MCP `WWW-Authenticate` headers |
 | **Dynamic Client Registration** | Registers an OAuth client automatically (RFC 7591) — no Client ID required |
@@ -157,6 +158,55 @@ After connecting, click **Count with Claude API**. The tool makes two parallel c
 In the Token Summary card or on each tool card:
 - **Copy as Claude API format** — uses `input_schema` key, ready for `anthropic.messages.create(tools=[…])`
 - **Copy as MCP format** — uses `inputSchema` key, the native MCP representation
+
+### 7 — Compare two servers
+
+Click **⚡ Compare Two Servers** at the bottom of the sidebar to enter Compare Mode.
+
+1. Enter **Server A** and **Server B** URLs, transports, and auth settings
+2. Click **⚡ Run Comparison** — both servers are contacted simultaneously
+
+> Auth options in Compare Mode: None, Bearer Token, Custom Header.  
+> For OAuth flows, complete authentication in normal mode first and paste the resulting Bearer token here.
+
+#### Reading the results
+
+**Comparison Results card** — performance and primitive counts side by side:
+
+| Row | What it measures | Lower/Higher is better |
+|-----|-----------------|------------------------|
+| Status | Connection success or error message | — |
+| Roundtrip | Browser→backend→server total time | Lower |
+| MCP Fetch | Backend time to connect and list all primitives | Lower |
+| Transport | Which transport was negotiated (streamable_http / sse) | — |
+| Tools | Number of tools exposed | — |
+| Est. Tokens | Total estimated tokens for all tool definitions | Lower (cheaper per request) |
+| Resources | Number of resources exposed | — |
+| Prompts | Number of prompts exposed | — |
+
+The **Server B (vs A)** column shows a coloured percentage diff: green = B improved relative to A, red = B regressed. The row with the better value is **bolded green** for latency and token metrics.
+
+The **Estimated Token Usage** bar chart visualises the token gap between the two servers at a glance.
+
+**Quality Metrics card** — documentation and schema richness of the tool set:
+
+| Metric | What it measures | Higher/Lower is better |
+|--------|-----------------|------------------------|
+| Tool desc coverage | % of tools that have a non-empty description | Higher — undocumented tools are harder for Claude to use correctly |
+| Avg desc length | Mean character count of tool descriptions (among described tools) | Higher — longer descriptions give Claude more context |
+| Param desc rate | % of parameters that have a description in their JSON Schema | Higher — undescribed params force Claude to guess their purpose |
+| Tokens / tool | Est. tokens ÷ tool count | Lower — indicates leaner, less verbose schemas |
+| Avg params / tool | Mean number of parameters per tool | Context-dependent |
+| Required param % | Required parameters as a fraction of all parameters | Context-dependent |
+| Tool overlap | Shared tool names ÷ all unique names (green ≥ 70% · yellow ≥ 40% · grey < 40%) | — |
+
+**Tool / Resource / Prompt Diff cards** — show which primitives exist only in A, only in B, or in both:
+
+- **A only** (blue tags) — primitives present on Server A but absent on Server B
+- **Both** (grey tags) — primitives with the same name on both servers
+- **B only** (green tags) — primitives present on Server B but absent on Server A
+
+The count on the right of each row is the number of items in that group.
 
 ---
 
