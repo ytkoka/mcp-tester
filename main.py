@@ -2,6 +2,7 @@ import asyncio
 import base64
 import hashlib
 import html as html_module
+import ipaddress
 import json
 import logging
 import os
@@ -259,6 +260,42 @@ async def connect_and_get_tools(url: str, headers: dict, transport: str) -> tupl
 
 # ── SSO helpers ──────────────────────────────────────────────────
 
+_BLOCKED_NETWORKS = (
+    ipaddress.ip_network("127.0.0.0/8"),
+    ipaddress.ip_network("10.0.0.0/8"),
+    ipaddress.ip_network("172.16.0.0/12"),
+    ipaddress.ip_network("192.168.0.0/16"),
+    ipaddress.ip_network("169.254.0.0/16"),  # AWS/Azure IMDS, link-local
+    ipaddress.ip_network("::1/128"),
+    ipaddress.ip_network("fc00::/7"),
+    ipaddress.ip_network("fe80::/10"),
+)
+
+
+def _assert_safe_discovery_url(url: str) -> None:
+    """Raise ValueError if the URL targets a private/reserved IP or uses a non-http(s) scheme.
+    Defends against SSRF when following attacker-controlled redirect chains in OAuth discovery."""
+    parsed = urlparse(url)
+    if parsed.scheme not in ("http", "https"):
+        raise ValueError(f"Disallowed URL scheme: {parsed.scheme!r}")
+    host = parsed.hostname or ""
+    if not host:
+        raise ValueError("URL is missing a hostname")
+    try:
+        ip = ipaddress.ip_address(host)
+    except ValueError:
+        return  # domain name literal — allow without DNS resolution
+    if any(ip in net for net in _BLOCKED_NETWORKS):
+        raise ValueError(f"URL targets a private/reserved address: {ip}")
+
+
+def _assert_http_scheme(url: str) -> None:
+    """Raise ValueError if the URL scheme is not http or https (e.g. javascript:, file:)."""
+    scheme = urlparse(url).scheme
+    if scheme not in ("http", "https"):
+        raise ValueError(f"Disallowed URL scheme: {scheme!r}")
+
+
 async def _discover_oauth_full(url: str) -> dict:
     """
     Full OAuth discovery following the MCP spec:
@@ -299,11 +336,13 @@ async def _discover_oauth_full(url: str) -> dict:
                 www_auth = resp.headers.get("WWW-Authenticate", "")
                 m = re.search(r'resource_metadata="([^"]+)"', www_auth)
                 if m:
+                    _assert_safe_discovery_url(m.group(1))
                     meta_resp = await client.get(m.group(1))
                     if meta_resp.status_code == 200:
                         meta = meta_resp.json()
                         as_urls = meta.get("authorization_servers", [])
                         if as_urls:
+                            _assert_safe_discovery_url(as_urls[0])
                             as_resp = await client.get(
                                 f"{as_urls[0]}/.well-known/oauth-authorization-server"
                             )
@@ -421,6 +460,12 @@ async def oauth_start(req: OAuthStartRequest):
             status_code=400,
             content={"success": False, "error": "auth_endpoint / token_endpoint / client_id が取得できませんでした。"},
         )
+
+    try:
+        _assert_http_scheme(auth_endpoint)
+        _assert_http_scheme(token_endpoint)
+    except ValueError as e:
+        return JSONResponse(status_code=400, content={"success": False, "error": str(e)})
 
     # ── Step 3: Build PKCE auth URL ──────────────────────────────
     verifier, challenge = _pkce_pair()

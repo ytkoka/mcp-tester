@@ -922,7 +922,7 @@ function buildExecuteSection(tool, idx) {
       const type  = schema.type || 'string';
       const desc  = schema.description || '';
       const enums = schema.enum;
-      const iid   = `exec-${idx}-p-${key}`;
+      const iid   = `exec-${idx}-p-${escHtml(key)}`;
 
       let inp;
       if (enums && enums.length > 0) {
