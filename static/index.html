@@ -445,6 +445,28 @@ details summary::-webkit-details-marker { display: none; }
 .score-warn-tag { font-size: 11px; padding: 3px 8px; border-radius: var(--radius-sm);
   background: rgba(248,81,73,0.07); border: 1px solid rgba(248,81,73,0.22); color: #ff9492; }
 .score-grade-badge { font-size: 15px; font-weight: 800; margin-right: 3px; }
+
+/* ── Cost Estimate Card ───────────────────────────────────────── */
+.cost-inputs { display: flex; gap: 16px; margin-bottom: 14px; }
+.cost-inputs > div { flex: 1; }
+.cost-table-wrap { overflow-x: auto; }
+.cost-table { width: 100%; border-collapse: collapse; font-size: 12px; min-width: 480px; }
+.cost-table th {
+  font-size: 10px; text-transform: uppercase; letter-spacing: 0.07em; font-weight: 600;
+  color: var(--text-muted); padding: 5px 10px; border-bottom: 1px solid var(--border); text-align: left;
+}
+.cost-table td { padding: 7px 10px; border-bottom: 1px solid rgba(48,54,61,0.5); vertical-align: middle; }
+.cost-table tr:last-child td { border-bottom: none; }
+.cost-model-name { font-weight: 500; color: var(--text); white-space: nowrap; }
+.cost-price-wrap { display: flex; align-items: center; gap: 3px; color: var(--text-muted); }
+.cost-table .cost-price-input {
+  width: 58px; padding: 3px 5px; font-size: 11px; text-align: right;
+}
+.cost-price-unit { font-size: 10px; color: var(--text-dim); white-space: nowrap; }
+.cost-val { font-family: "SF Mono","Fira Code",monospace; font-size: 12px; color: var(--text); text-align: right; white-space: nowrap; }
+.cost-val-req { color: var(--text-muted); }
+.cost-overhead { margin-top: 12px; padding-top: 10px; border-top: 1px solid var(--border); }
+.cost-note { font-size: 11px; color: var(--text-dim); margin-top: 8px; line-height: 1.5; }
 </style>
 </head>
 <body>
@@ -632,6 +654,132 @@ let maxTokens = 0;
 let tokenDisplayMode = 'estimate'; // 'estimate' | 'api'
 let currentConnection = null; // {url, auth, transport}
 let activeTab = 'tools';
+let currentInputTokens = 0;  // per_request_estimate (used for cost calc)
+let currentToolTokens  = 0;  // tools_total only
+
+// ── Cost model pricing ($/1M tokens, editable at runtime) ────────
+const MODELS = [
+  { id: 'haiku-4-5',  name: 'Claude Haiku 4.5',  inputPer1M:  0.80, outputPer1M:  4.00 },
+  { id: 'sonnet-4-6', name: 'Claude Sonnet 4.6',  inputPer1M:  3.00, outputPer1M: 15.00 },
+  { id: 'opus-4-8',   name: 'Claude Opus 4.8',    inputPer1M: 15.00, outputPer1M: 75.00 },
+];
+
+function fmtCost(v) {
+  if (v === 0)      return '0.000';
+  if (v < 0.00001)  return v.toExponential(2);
+  if (v < 0.001)   return v.toFixed(5);
+  if (v < 0.01)    return v.toFixed(4);
+  if (v < 0.1)     return v.toFixed(3);
+  if (v < 10)      return v.toFixed(2);
+  if (v < 100000)  return v.toFixed(1);
+  return Math.round(v).toLocaleString();
+}
+
+function renderCostCard() {
+  if (!currentInputTokens) return '';
+  const rows = MODELS.map(m => `
+    <tr>
+      <td class="cost-model-name">${escHtml(m.name)}</td>
+      <td>
+        <div class="cost-price-wrap">
+          $<input class="cost-price-input" data-model="${m.id}" data-ptype="input"
+                  type="number" value="${m.inputPer1M}" step="0.01" min="0"
+                  oninput="onCostPriceEdit(this)">
+          <span class="cost-price-unit">/MTok</span>
+        </div>
+      </td>
+      <td>
+        <div class="cost-price-wrap">
+          $<input class="cost-price-input" data-model="${m.id}" data-ptype="output"
+                  type="number" value="${m.outputPer1M}" step="0.01" min="0"
+                  oninput="onCostPriceEdit(this)">
+          <span class="cost-price-unit">/MTok</span>
+        </div>
+      </td>
+      <td class="cost-val cost-val-req" id="cc-${m.id}-req">—</td>
+      <td class="cost-val" id="cc-${m.id}-day">—</td>
+      <td class="cost-val" id="cc-${m.id}-mon">—</td>
+    </tr>`).join('');
+
+  return `<div class="card" id="cost-card">
+    <div class="card-title">Cost Estimate
+      <span style="font-size:10px;font-weight:400;color:var(--text-dim)"> — prices are editable</span>
+    </div>
+    <div class="cost-inputs">
+      <div>
+        <label>Requests / day</label>
+        <input id="cost-req-day" type="number" value="100" min="1" oninput="updateCostCard()">
+      </div>
+      <div>
+        <label>Avg output tokens / request</label>
+        <input id="cost-out-tok" type="number" value="500" min="0" oninput="updateCostCard()">
+      </div>
+    </div>
+    <div class="cost-table-wrap">
+      <table class="cost-table">
+        <thead>
+          <tr>
+            <th>Model</th>
+            <th>Input price</th>
+            <th>Output price</th>
+            <th style="text-align:right">/ request</th>
+            <th style="text-align:right">/ day</th>
+            <th style="text-align:right">/ month</th>
+          </tr>
+        </thead>
+        <tbody>${rows}</tbody>
+      </table>
+    </div>
+    <div class="cost-overhead" id="cost-overhead"></div>
+    <div class="cost-note">
+      Input tokens: <strong>${fmtNum(currentInputTokens)}</strong> per request
+      (tool definitions + system overhead).
+      Output estimate is configurable above.
+      Prices last updated July 2025 — edit above if rates have changed.
+    </div>
+  </div>`;
+}
+
+function onCostPriceEdit(el) {
+  const m   = MODELS.find(m => m.id === el.dataset.model);
+  const val = parseFloat(el.value);
+  if (m && !isNaN(val) && val >= 0) {
+    if (el.dataset.ptype === 'input')  m.inputPer1M  = val;
+    if (el.dataset.ptype === 'output') m.outputPer1M = val;
+  }
+  updateCostCard();
+}
+
+function updateCostCard() {
+  if (!document.getElementById('cost-card')) return;
+  const reqPerDay = Math.max(1, parseInt(document.getElementById('cost-req-day')?.value) || 100);
+  const outTok    = Math.max(0, parseInt(document.getElementById('cost-out-tok')?.value) || 0);
+
+  MODELS.forEach(m => {
+    const inCost  = currentInputTokens / 1_000_000 * m.inputPer1M;
+    const outCost = outTok             / 1_000_000 * m.outputPer1M;
+    const perReq  = inCost + outCost;
+    const perDay  = perReq * reqPerDay;
+    const perMon  = perDay * 30;
+    const reqEl = document.getElementById(`cc-${m.id}-req`);
+    const dayEl = document.getElementById(`cc-${m.id}-day`);
+    const monEl = document.getElementById(`cc-${m.id}-mon`);
+    if (reqEl) reqEl.textContent = '$' + fmtCost(perReq);
+    if (dayEl) dayEl.textContent = '$' + fmtCost(perDay);
+    if (monEl) monEl.textContent = '$' + fmtCost(perMon);
+  });
+
+  const pct = currentInputTokens > 0 ? Math.round(currentToolTokens / currentInputTokens * 100) : 0;
+  const el  = document.getElementById('cost-overhead');
+  if (el) el.innerHTML = `
+    <div style="font-size:11px;color:var(--text-muted);margin-bottom:5px">
+      Tool definition overhead: <strong style="color:var(--accent)">${pct}%</strong> of input
+      <span style="color:var(--text-dim)">(${fmtNum(currentToolTokens)} tool tokens / ${fmtNum(currentInputTokens)} total)</span>
+    </div>
+    <div style="height:5px;background:var(--surface2);border-radius:3px;overflow:hidden">
+      <div style="width:${pct}%;height:100%;background:var(--accent);border-radius:3px"></div>
+    </div>`;
+}
 
 // ── Auth fields ──────────────────────────────────────────────────
 const AUTH_FIELDS = {
@@ -946,6 +1094,11 @@ function applyAccurateTokens(data) {
   // Re-render tool list with accurate tokens
   const q = document.getElementById('tool-search')?.value || '';
   filterTools(q);
+
+  // Refresh cost card with accurate token counts
+  currentInputTokens = data.total_input_tokens || currentInputTokens;
+  currentToolTokens  = data.tool_tokens        || currentToolTokens;
+  updateCostCard();
 }
 
 // ── Render ───────────────────────────────────────────────────────
@@ -966,6 +1119,8 @@ function renderResults(data, roundtripMs) {
   currentTools.forEach(t => delete t.accurate_tokens);
   maxTokens = currentTools.reduce((m, t) => Math.max(m, t.estimated_tokens), 1);
   activeTab = 'tools';
+  currentInputTokens = (data.token_summary || {}).per_request_estimate || 0;
+  currentToolTokens  = (data.token_summary || {}).tools_total          || 0;
 
   const si = data.server_info || {};
   const ts = data.token_summary;
@@ -1019,6 +1174,8 @@ function renderResults(data, roundtripMs) {
       </div>
     </div>
 
+    ${renderCostCard()}
+
     ${renderScoreCard(currentTools)}
 
     <div>
@@ -1071,6 +1228,7 @@ function renderResults(data, roundtripMs) {
   renderToolList(currentTools);
   renderResourceList(currentResources);
   renderPromptList(currentPrompts);
+  updateCostCard();
 }
 
 function switchTab(tab) {
