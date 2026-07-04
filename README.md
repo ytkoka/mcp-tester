@@ -1,7 +1,7 @@
 # MCP Server Tester
 
 A web-based tool for inspecting [Model Context Protocol (MCP)](https://modelcontextprotocol.io) servers.  
-Connect to any MCP server, browse its **Tools, Resources, and Prompts**, measure fetch latency, estimate token usage, and **compare two servers side by side**.
+Connect to any MCP server, browse its **Tools, Resources, and Prompts**, measure fetch latency, estimate token usage, **score the quality of tool definitions**, and **compare two servers side by side**.
 
 ---
 
@@ -15,7 +15,8 @@ Connect to any MCP server, browse its **Tools, Resources, and Prompts**, measure
 | **Token estimation** | Estimates input tokens per Claude API request (~4 chars/token heuristic) |
 | **Accurate token counting** | Calls `POST /v1/messages/count_tokens` with your Anthropic API key for exact counts |
 | **Fetch timing** | Shows MCP server fetch time and total client roundtrip time |
-| **Compare Mode** | Connects to two servers in parallel and compares performance, tokens, and documentation quality |
+| **LLM Readiness Score** | Grades tool definitions A–F across 5 dimensions; highlights which tools need improvement |
+| **Compare Mode** | Connects to two servers in parallel and compares performance, tokens, quality scores, and documentation |
 | **Multiple auth methods** | None · Bearer Token · OAuth2 Client Credentials · SSO (Authorization Code + PKCE) · Custom Header |
 | **SSO auto-discovery** | Discovers OAuth endpoints from `/.well-known/oauth-authorization-server` and MCP `WWW-Authenticate` headers |
 | **Dynamic Client Registration** | Registers an OAuth client automatically (RFC 7591) — no Client ID required |
@@ -159,9 +160,45 @@ In the Token Summary card or on each tool card:
 - **Copy as Claude API format** — uses `input_schema` key, ready for `anthropic.messages.create(tools=[…])`
 - **Copy as MCP format** — uses `inputSchema` key, the native MCP representation
 
-### 7 — Compare two servers
+### 7 — LLM Readiness Score
 
-Click **⚡ Compare Two Servers** at the bottom of the sidebar to enter Compare Mode.
+After connecting, a **LLM Readiness Score** card appears automatically below the Token Summary. It evaluates how well-defined the server's tools are for any LLM — before you run a single query.
+
+#### Scoring dimensions
+
+| Dimension | Weight | What is measured |
+|-----------|--------|-----------------|
+| Tool descriptions | 20% | Character length of each tool's description (0 pts if absent, up to 100 pts for 200+ chars) |
+| Param descriptions | 25% | % of parameters that have a non-empty `description` field |
+| Type definitions | 25% | % of parameters with an explicit `type`; bonus for `enum`, `format`, `pattern`, range constraints |
+| Required annotation | 15% | Whether the `required` array is present and correctly marks some (not all) params as mandatory |
+| Schema specificity | 15% | % of parameters that carry at least one constraint (`enum`, `format`, `pattern`, min/max, etc.) |
+
+Each dimension scores 0–100. The **Overall Score** is the weighted average.
+
+#### Grades
+
+| Grade | Score | Meaning |
+|-------|-------|---------|
+| A | 90–100 | LLM-ready — definitions are thorough and unambiguous |
+| B | 75–89 | Good — minor gaps, Claude will generally use tools correctly |
+| C | 60–74 | Adequate — some descriptions or types are missing |
+| D | 45–59 | Needs improvement — Claude may struggle to choose the right tool or arguments |
+| F | < 45 | Poor — definitions are too sparse for reliable use |
+
+#### Color coding
+
+- Bar color: green ≥ 75 · yellow ≥ 50 · red < 50
+- Warning tags appear at the bottom of the card for actionable issues:
+  - *N tools missing description*
+  - *N tools have untyped parameters*
+  - *N tools have undescribed parameters*
+  - *N tools missing required annotation*
+
+### 8 — Compare two servers
+
+Click **⚡ Compare Two Servers** at the bottom of the sidebar to enter Compare Mode.  
+Both servers are scored independently and the results appear in the Quality Metrics card for easy side-by-side comparison.
 
 1. Enter **Server A** and **Server B** URLs, transports, and auth settings
 2. Click **⚡ Run Comparison** — both servers are contacted simultaneously
@@ -188,14 +225,27 @@ The **Server B (vs A)** column shows a coloured percentage diff: green = B impro
 
 The **Estimated Token Usage** bar chart visualises the token gap between the two servers at a glance.
 
-**Quality Metrics card** — documentation and schema richness of the tool set:
+**Quality Metrics card** — LLM Readiness Score and documentation richness side by side:
+
+The top rows show the heuristic quality score (see §7) computed for each server's tool set:
+
+| Row | What it measures | Better |
+|-----|-----------------|--------|
+| Overall Score | Weighted average of the 5 scoring dimensions, shown with letter grade | Higher |
+| ↳ Tool descriptions | Dimension score (0–100) | Higher |
+| ↳ Param descriptions | Dimension score (0–100) | Higher |
+| ↳ Type definitions | Dimension score (0–100) | Higher |
+| ↳ Required annotation | Dimension score (0–100) | Higher |
+| ↳ Schema specificity | Dimension score (0–100) | Higher |
+
+Below those are descriptive statistics:
 
 | Metric | What it measures | Higher/Lower is better |
 |--------|-----------------|------------------------|
-| Tool desc coverage | % of tools that have a non-empty description | Higher — undocumented tools are harder for Claude to use correctly |
-| Avg desc length | Mean character count of tool descriptions (among described tools) | Higher — longer descriptions give Claude more context |
-| Param desc rate | % of parameters that have a description in their JSON Schema | Higher — undescribed params force Claude to guess their purpose |
-| Tokens / tool | Est. tokens ÷ tool count | Lower — indicates leaner, less verbose schemas |
+| Tool desc coverage | % of tools that have a non-empty description | Higher |
+| Avg desc length | Mean character count of tool descriptions | Higher |
+| Param desc rate | % of parameters that have a `description` field | Higher |
+| Tokens / tool | Est. tokens ÷ tool count | Lower — leaner schemas |
 | Avg params / tool | Mean number of parameters per tool | Context-dependent |
 | Required param % | Required parameters as a fraction of all parameters | Context-dependent |
 | Tool overlap | Shared tool names ÷ all unique names (green ≥ 70% · yellow ≥ 40% · grey < 40%) | — |

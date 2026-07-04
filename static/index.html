@@ -429,6 +429,22 @@ details summary::-webkit-details-marker { display: none; }
 .cmp-loading-bars { display: flex; gap: 5px; align-items: flex-end; height: 28px; }
 .cmp-pulse-a { width: 5px; background: var(--accent);  border-radius: 3px; height: 100%; animation: cmpPulse 1.1s ease-in-out infinite; }
 .cmp-pulse-b { width: 5px; background: var(--success); border-radius: 3px; height: 100%; animation: cmpPulse 1.1s ease-in-out 0.35s infinite; }
+
+/* ── Quality Score Card ───────────────────────────────────────── */
+.score-header { display: flex; align-items: center; gap: 14px; margin-bottom: 14px; }
+.score-grade  { font-size: 42px; font-weight: 800; line-height: 1; width: 46px; flex-shrink: 0; }
+.score-number { font-size: 24px; font-weight: 700; color: var(--text); line-height: 1.2; }
+.score-dims   { display: flex; flex-direction: column; gap: 8px; }
+.score-dim-row { display: flex; align-items: center; gap: 8px; }
+.score-dim-label { font-size: 12px; color: var(--text-muted); width: 160px; flex-shrink: 0; }
+.score-bar-track { flex: 1; height: 6px; background: var(--surface2); border-radius: 3px; overflow: hidden; }
+.score-bar-fill  { height: 100%; border-radius: 3px; transition: width 0.45s ease; }
+.score-dim-val { font-size: 12px; font-weight: 600; width: 26px; text-align: right; flex-shrink: 0; }
+.score-dim-wt  { font-size: 10px; color: var(--text-dim); width: 28px; text-align: right; flex-shrink: 0; }
+.score-warnings { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 12px; padding-top: 10px; border-top: 1px solid var(--border); }
+.score-warn-tag { font-size: 11px; padding: 3px 8px; border-radius: var(--radius-sm);
+  background: rgba(248,81,73,0.07); border: 1px solid rgba(248,81,73,0.22); color: #ff9492; }
+.score-grade-badge { font-size: 15px; font-weight: 800; margin-right: 3px; }
 </style>
 </head>
 <body>
@@ -1002,6 +1018,8 @@ function renderResults(data, roundtripMs) {
         <button class="btn-sm" onclick="copyAllTools('mcp')">Copy as MCP format</button>
       </div>
     </div>
+
+    ${renderScoreCard(currentTools)}
 
     <div>
       <div class="primitive-tabs">
@@ -1644,6 +1662,147 @@ function syntaxHighlight(obj) {
     .replace(/: (\d+)/g,': <span style="color:#f2cc60">$1</span>');
 }
 
+// ── Tool Quality Scoring ──────────────────────────────────────────
+function _scoreDimDesc(tool) {
+  const len = (tool.description || '').trim().length;
+  if (len === 0)  return 0;
+  if (len < 10)   return 15;
+  if (len < 30)   return 40;
+  if (len < 80)   return 70;
+  if (len < 200)  return 90;
+  return 100;
+}
+function _scoreDimParamDesc(tool) {
+  const props = Object.values((tool.inputSchema && tool.inputSchema.properties) || {});
+  if (!props.length) return 100;
+  const n = props.filter(p => (p.description || '').trim().length > 0).length;
+  return Math.round(n / props.length * 100);
+}
+function _scoreDimTypeDefs(tool) {
+  const props = Object.values((tool.inputSchema && tool.inputSchema.properties) || {});
+  if (!props.length) return 100;
+  let pts = 0;
+  props.forEach(p => {
+    if (p.type)  pts += 70;
+    if (p.enum && p.enum.length > 0) pts += 20;
+    if (p.format || p.pattern || p.minimum !== undefined ||
+        p.maximum !== undefined || p.minLength !== undefined || p.maxLength !== undefined) pts += 10;
+  });
+  return Math.min(100, Math.round(pts / props.length));
+}
+function _scoreDimRequired(tool) {
+  const propKeys = Object.keys((tool.inputSchema && tool.inputSchema.properties) || {});
+  if (!propKeys.length) return 100;
+  const schema = tool.inputSchema || {};
+  if (!Object.prototype.hasOwnProperty.call(schema, 'required')) return 20;
+  const req = schema.required || [];
+  if (req.length === 0)              return 40;
+  if (req.length === propKeys.length) return 70;
+  return 100;
+}
+function _scoreDimSpecificity(tool) {
+  const props = Object.values((tool.inputSchema && tool.inputSchema.properties) || {});
+  if (!props.length) return 100;
+  let rich = 0;
+  props.forEach(p => {
+    if (p.enum || p.format || p.pattern ||
+        p.minimum !== undefined || p.maximum !== undefined ||
+        p.minLength !== undefined || p.maxLength !== undefined ||
+        p.items || p.default !== undefined) rich++;
+  });
+  return Math.round(30 + (rich / props.length) * 70);
+}
+
+function scoreServer(tools) {
+  if (!tools.length) return null;
+  const n = tools.length;
+  let dDesc = 0, dPD = 0, dTD = 0, dReq = 0, dSpec = 0;
+  const warn = { noDesc: [], untypedParams: [], noParamDesc: [], noRequired: [] };
+
+  tools.forEach(t => {
+    const sd = _scoreDimDesc(t), sp = _scoreDimParamDesc(t),
+          st = _scoreDimTypeDefs(t), sr = _scoreDimRequired(t), ss = _scoreDimSpecificity(t);
+    dDesc += sd; dPD += sp; dTD += st; dReq += sr; dSpec += ss;
+
+    const hasParams = Object.keys((t.inputSchema && t.inputSchema.properties) || {}).length > 0;
+    if (sd < 40)            warn.noDesc.push(t.name);
+    if (hasParams && st < 70) warn.untypedParams.push(t.name);
+    if (hasParams && sp < 50) warn.noParamDesc.push(t.name);
+    if (hasParams && sr < 40) warn.noRequired.push(t.name);
+  });
+
+  const avgs = {
+    desc:        Math.round(dDesc  / n),
+    paramDesc:   Math.round(dPD    / n),
+    typeDefs:    Math.round(dTD    / n),
+    required:    Math.round(dReq   / n),
+    specificity: Math.round(dSpec  / n),
+  };
+  const overall = Math.round(
+    avgs.desc * 0.20 + avgs.paramDesc * 0.25 + avgs.typeDefs * 0.25 +
+    avgs.required * 0.15 + avgs.specificity * 0.15
+  );
+  return { overall, dims: avgs, warn, toolCount: n };
+}
+
+function scoreGrade(v) {
+  if (v >= 90) return { grade: 'A', label: 'LLM-ready',         color: 'var(--success)' };
+  if (v >= 75) return { grade: 'B', label: 'Good',              color: 'var(--accent)'  };
+  if (v >= 60) return { grade: 'C', label: 'Adequate',          color: 'var(--warning)' };
+  if (v >= 45) return { grade: 'D', label: 'Needs improvement', color: '#e3700a'        };
+  return               { grade: 'F', label: 'Poor',             color: 'var(--error)'   };
+}
+
+function renderScoreCard(tools) {
+  if (!tools.length) return '';
+  const s = scoreServer(tools);
+  const g = scoreGrade(s.overall);
+
+  function dimBar(label, score, weight) {
+    const col = score >= 75 ? 'var(--success)' : score >= 50 ? 'var(--warning)' : 'var(--error)';
+    return `<div class="score-dim-row">
+      <span class="score-dim-label">${label}</span>
+      <div class="score-bar-track"><div class="score-bar-fill" style="width:${score}%;background:${col}"></div></div>
+      <span class="score-dim-val" style="color:${col}">${score}</span>
+      <span class="score-dim-wt">${weight}%</span>
+    </div>`;
+  }
+
+  const warnLines = [];
+  if (s.warn.noDesc.length)
+    warnLines.push(`${s.warn.noDesc.length} tool${s.warn.noDesc.length > 1 ? 's' : ''} missing description`);
+  if (s.warn.untypedParams.length)
+    warnLines.push(`${s.warn.untypedParams.length} tool${s.warn.untypedParams.length > 1 ? 's' : ''} have untyped parameters`);
+  if (s.warn.noParamDesc.length)
+    warnLines.push(`${s.warn.noParamDesc.length} tool${s.warn.noParamDesc.length > 1 ? 's' : ''} have undescribed parameters`);
+  if (s.warn.noRequired.length)
+    warnLines.push(`${s.warn.noRequired.length} tool${s.warn.noRequired.length > 1 ? 's' : ''} missing required annotation`);
+
+  return `<div class="card">
+    <div class="card-title">LLM Readiness Score</div>
+    <div class="score-header">
+      <div class="score-grade" style="color:${g.color}">${g.grade}</div>
+      <div>
+        <div class="score-number">${s.overall}<span style="font-size:14px;font-weight:400;color:var(--text-dim)">/100</span></div>
+        <div style="font-size:11px;color:${g.color};margin-top:2px">${g.label}</div>
+      </div>
+      <div style="margin-left:auto;font-size:11px;color:var(--text-dim);align-self:flex-end">
+        based on ${s.toolCount} tool${s.toolCount !== 1 ? 's' : ''}
+      </div>
+    </div>
+    <div class="score-dims">
+      ${dimBar('Tool descriptions',  s.dims.desc,        20)}
+      ${dimBar('Param descriptions', s.dims.paramDesc,   25)}
+      ${dimBar('Type definitions',   s.dims.typeDefs,    25)}
+      ${dimBar('Required annotation',s.dims.required,    15)}
+      ${dimBar('Schema specificity', s.dims.specificity, 15)}
+    </div>
+    ${warnLines.length
+      ? `<div class="score-warnings">${warnLines.map(w => `<span class="score-warn-tag">⚠ ${escHtml(w)}</span>`).join('')}</div>`
+      : `<div style="margin-top:10px;font-size:12px;color:var(--success)">✓ No issues detected</div>`}
+  </div>`;
+}
+
 // ── Compare Mode ──────────────────────────────────────────────────
 let compareActive = false;
 
@@ -1844,8 +2003,42 @@ function renderCompareResults(rA, rB, urlA, urlB) {
   const uniqueN  = new Set([...toolsA.map(x => x.name), ...toolsB.map(x => x.name)]).size;
   const overlapPct = uniqueN > 0 ? Math.round(commonN / uniqueN * 100) : 0;
 
+  // overall scores for compare mode
+  const sqA = toolsA.length ? scoreServer(toolsA) : null;
+  const sqB = toolsB.length ? scoreServer(toolsB) : null;
+
+  function gradeBadge(sq) {
+    if (!sq) return '—';
+    const g = scoreGrade(sq.overall);
+    return `<span class="score-grade-badge" style="color:${g.color}">${g.grade}</span>${sq.overall}<span style="font-size:11px;color:var(--text-dim)">/100</span>`;
+  }
+
   const pct = v => v !== null ? `${v}%` : '—';
   const qualityRows = [
+    sqA || sqB ? tr('Overall Score',
+      gradeBadge(sqA), gradeBadge(sqB),
+      sqA && sqB ? relDiff(sqA.overall, sqB.overall) : '',
+      sqA && sqB ? (sqA.overall >= sqB.overall ? 'a' : 'b') : null) : '',
+    sqA || sqB ? tr('↳ Tool descriptions',
+      sqA ? sqA.dims.desc + '' : '—', sqB ? sqB.dims.desc + '' : '—',
+      sqA && sqB ? relDiff(sqA.dims.desc, sqB.dims.desc) : '',
+      sqA && sqB ? (sqA.dims.desc >= sqB.dims.desc ? 'a' : 'b') : null) : '',
+    sqA || sqB ? tr('↳ Param descriptions',
+      sqA ? sqA.dims.paramDesc + '' : '—', sqB ? sqB.dims.paramDesc + '' : '—',
+      sqA && sqB ? relDiff(sqA.dims.paramDesc, sqB.dims.paramDesc) : '',
+      sqA && sqB ? (sqA.dims.paramDesc >= sqB.dims.paramDesc ? 'a' : 'b') : null) : '',
+    sqA || sqB ? tr('↳ Type definitions',
+      sqA ? sqA.dims.typeDefs + '' : '—', sqB ? sqB.dims.typeDefs + '' : '—',
+      sqA && sqB ? relDiff(sqA.dims.typeDefs, sqB.dims.typeDefs) : '',
+      sqA && sqB ? (sqA.dims.typeDefs >= sqB.dims.typeDefs ? 'a' : 'b') : null) : '',
+    sqA || sqB ? tr('↳ Required annotation',
+      sqA ? sqA.dims.required + '' : '—', sqB ? sqB.dims.required + '' : '—',
+      sqA && sqB ? relDiff(sqA.dims.required, sqB.dims.required) : '',
+      sqA && sqB ? (sqA.dims.required >= sqB.dims.required ? 'a' : 'b') : null) : '',
+    sqA || sqB ? tr('↳ Schema specificity',
+      sqA ? sqA.dims.specificity + '' : '—', sqB ? sqB.dims.specificity + '' : '—',
+      sqA && sqB ? relDiff(sqA.dims.specificity, sqB.dims.specificity) : '',
+      sqA && sqB ? (sqA.dims.specificity >= sqB.dims.specificity ? 'a' : 'b') : null) : '',
     tr('Tool desc coverage',
        dcA ? `${dcA.pct}% (${dcA.n}/${dcA.total})` : '—',
        dcB ? `${dcB.pct}% (${dcB.n}/${dcB.total})` : '—',
