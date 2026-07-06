@@ -183,7 +183,7 @@ def prompt_to_dict(prompt: Any) -> dict[str, Any]:
     }
 
 
-async def _list_primitives(session: ClientSession, caps: Any) -> tuple[list, list, list]:
+async def _list_primitives(session: ClientSession, caps: Any) -> tuple[list, list, list, dict]:
     """List only the primitives the server advertised in its initialize capabilities.
 
     Gating on caps prevents calling list_resources/list_prompts on servers that
@@ -194,46 +194,79 @@ async def _list_primitives(session: ClientSession, caps: Any) -> tuple[list, lis
     resources/prompts: called only when explicitly advertised.
     """
     tools, resources, prompts = [], [], []
+    timing: dict[str, int] = {"list_tools_ms": 0, "list_resources_ms": 0, "list_prompts_ms": 0}
+
     if caps is None or getattr(caps, "tools", None) is not None:
+        _ts = time.perf_counter()
         try:
             tools = [tool_to_dict(t) for t in (await session.list_tools()).tools]
         except Exception:
             pass
+        timing["list_tools_ms"] = round((time.perf_counter() - _ts) * 1000)
+
     if caps is not None and getattr(caps, "resources", None) is not None:
+        _ts = time.perf_counter()
         try:
             resources = [resource_to_dict(r) for r in (await session.list_resources()).resources]
         except Exception:
             pass
+        timing["list_resources_ms"] = round((time.perf_counter() - _ts) * 1000)
+
     if caps is not None and getattr(caps, "prompts", None) is not None:
+        _ts = time.perf_counter()
         try:
             prompts = [prompt_to_dict(p) for p in (await session.list_prompts()).prompts]
         except Exception:
             pass
-    return tools, resources, prompts
+        timing["list_prompts_ms"] = round((time.perf_counter() - _ts) * 1000)
+
+    return tools, resources, prompts, timing
 
 
-async def _connect_streamable(url: str, headers: dict) -> tuple[list, list, list, dict]:
+async def _connect_streamable(url: str, headers: dict) -> tuple[list, list, list, dict, dict]:
     tools, resources, prompts, info = [], [], [], {}
+    timing: dict[str, int] = {}
+
+    _t0 = time.perf_counter()
     async with streamablehttp_client(url, headers=headers) as (read, write, _):
+        timing["transport_connect_ms"] = round((time.perf_counter() - _t0) * 1000)
+
         async with ClientSession(read, write) as session:
+            _t1 = time.perf_counter()
             result = await session.initialize()
+            timing["initialize_ms"] = round((time.perf_counter() - _t1) * 1000)
+
             if result.serverInfo:
                 info = {"name": result.serverInfo.name, "version": result.serverInfo.version}
             info["protocol_version"] = str(result.protocolVersion) if result.protocolVersion else "unknown"
-            tools, resources, prompts = await _list_primitives(session, result.capabilities)
-    return tools, resources, prompts, info
+
+            tools, resources, prompts, prim_timing = await _list_primitives(session, result.capabilities)
+            timing.update(prim_timing)
+
+    return tools, resources, prompts, info, timing
 
 
-async def _connect_sse(url: str, headers: dict) -> tuple[list, list, list, dict]:
+async def _connect_sse(url: str, headers: dict) -> tuple[list, list, list, dict, dict]:
     tools, resources, prompts, info = [], [], [], {}
+    timing: dict[str, int] = {}
+
+    _t0 = time.perf_counter()
     async with sse_client(url, headers=headers) as (read, write):
+        timing["transport_connect_ms"] = round((time.perf_counter() - _t0) * 1000)
+
         async with ClientSession(read, write) as session:
+            _t1 = time.perf_counter()
             result = await session.initialize()
+            timing["initialize_ms"] = round((time.perf_counter() - _t1) * 1000)
+
             if result.serverInfo:
                 info = {"name": result.serverInfo.name, "version": result.serverInfo.version}
             info["protocol_version"] = str(result.protocolVersion) if result.protocolVersion else "unknown"
-            tools, resources, prompts = await _list_primitives(session, result.capabilities)
-    return tools, resources, prompts, info
+
+            tools, resources, prompts, prim_timing = await _list_primitives(session, result.capabilities)
+            timing.update(prim_timing)
+
+    return tools, resources, prompts, info, timing
 
 
 def _serialize_content(result: Any) -> tuple[list[dict], bool]:
@@ -408,28 +441,28 @@ async def call_get_prompt_on_server(url: str, headers: dict, transport: str, pro
         raise RuntimeError(f"Both transports failed.\n• Streamable HTTP: {err_s}\n• SSE: {e}")
 
 
-async def connect_and_list_primitives(url: str, headers: dict, transport: str) -> tuple[list, list, list, dict, str]:
+async def connect_and_list_primitives(url: str, headers: dict, transport: str) -> tuple[list, list, list, dict, str, dict]:
     timeout = 30.0
 
     if transport == "streamable_http":
-        tools, resources, prompts, info = await asyncio.wait_for(_connect_streamable(url, headers), timeout)
-        return tools, resources, prompts, info, "streamable_http"
+        tools, resources, prompts, info, timing = await asyncio.wait_for(_connect_streamable(url, headers), timeout)
+        return tools, resources, prompts, info, "streamable_http", timing
 
     if transport == "sse":
-        tools, resources, prompts, info = await asyncio.wait_for(_connect_sse(url, headers), timeout)
-        return tools, resources, prompts, info, "sse"
+        tools, resources, prompts, info, timing = await asyncio.wait_for(_connect_sse(url, headers), timeout)
+        return tools, resources, prompts, info, "sse", timing
 
     # auto: try streamable first, fall back to SSE
     err_streamable = ""
     try:
-        tools, resources, prompts, info = await asyncio.wait_for(_connect_streamable(url, headers), timeout)
-        return tools, resources, prompts, info, "streamable_http"
+        tools, resources, prompts, info, timing = await asyncio.wait_for(_connect_streamable(url, headers), timeout)
+        return tools, resources, prompts, info, "streamable_http", timing
     except Exception as e:
         err_streamable = str(e)
 
     try:
-        tools, resources, prompts, info = await asyncio.wait_for(_connect_sse(url, headers), timeout)
-        return tools, resources, prompts, info, "sse"
+        tools, resources, prompts, info, timing = await asyncio.wait_for(_connect_sse(url, headers), timeout)
+        return tools, resources, prompts, info, "sse", timing
     except Exception as e:
         raise RuntimeError(
             f"Both transports failed.\n"
@@ -838,7 +871,7 @@ async def connect_to_mcp(req: ConnectRequest):
         headers = await build_headers(req.auth)
 
         t0 = time.perf_counter()
-        tools_raw, resources_raw, prompts_raw, server_info, transport_used = await connect_and_list_primitives(
+        tools_raw, resources_raw, prompts_raw, server_info, transport_used, fetch_timing = await connect_and_list_primitives(
             req.url, headers, req.transport
         )
         fetch_ms = round((time.perf_counter() - t0) * 1000)
@@ -863,6 +896,7 @@ async def connect_to_mcp(req: ConnectRequest):
             "success": True,
             "transport_used": transport_used,
             "fetch_time_ms": fetch_ms,
+            "fetch_timing": fetch_timing,
             "server_info": server_info,
             "tool_count": len(tools),
             "tools": tools,

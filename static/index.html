@@ -467,6 +467,18 @@ details summary::-webkit-details-marker { display: none; }
 .cost-val-req { color: var(--text-muted); }
 .cost-overhead { margin-top: 12px; padding-top: 10px; border-top: 1px solid var(--border); }
 .cost-note { font-size: 11px; color: var(--text-dim); margin-top: 8px; line-height: 1.5; }
+
+/* ── Timing Breakdown ─────────────────────────────────────────── */
+.timing-toggle { background: none; border: none; color: var(--text-muted); font-size: 11px; cursor: pointer; padding: 2px 0; font-weight: 500; transition: color 0.15s; }
+.timing-toggle:hover { color: var(--accent); }
+.timing-panel { display: none; padding-top: 10px; }
+.timing-panel.open { display: block; }
+.timing-row { display: flex; align-items: center; gap: 8px; padding: 3px 0; }
+.timing-label { width: 150px; font-size: 11px; color: var(--text-muted); flex-shrink: 0; font-family: "SF Mono","Fira Code",monospace; }
+.timing-bar-track { flex: 1; height: 7px; background: var(--surface2); border-radius: 4px; overflow: hidden; }
+.timing-bar-fill { height: 100%; border-radius: 4px; }
+.timing-ms { width: 48px; text-align: right; font-size: 11px; font-family: "SF Mono","Fira Code",monospace; color: var(--text); flex-shrink: 0; }
+.timing-pct { width: 32px; text-align: right; font-size: 10px; color: var(--text-dim); flex-shrink: 0; }
 </style>
 </head>
 <body>
@@ -701,41 +713,43 @@ function renderCostCard() {
       <td class="cost-val" id="cc-${m.id}-mon">—</td>
     </tr>`).join('');
 
-  return `<div class="card" id="cost-card">
-    <div class="card-title">Cost Estimate
-      <span style="font-size:10px;font-weight:400;color:var(--text-dim)"> — prices are editable</span>
-    </div>
-    <div class="cost-inputs">
-      <div>
-        <label>Requests / day</label>
-        <input id="cost-req-day" type="number" value="100" min="1" oninput="updateCostCard()">
+  return `<div style="margin-top:8px;padding-top:8px;border-top:1px solid var(--border)">
+    <button class="timing-toggle" onclick="const o=this.nextElementSibling.classList.toggle('open');this.textContent=(o?'▼':'▶')+' Cost Estimate'">▶ Cost Estimate</button>
+    <div class="timing-panel">
+      <div style="padding-top:10px">
+        <div class="cost-inputs">
+          <div>
+            <label>Requests / day</label>
+            <input id="cost-req-day" type="number" value="100" min="1" oninput="updateCostCard()">
+          </div>
+          <div>
+            <label>Avg output tokens / request</label>
+            <input id="cost-out-tok" type="number" value="500" min="0" oninput="updateCostCard()">
+          </div>
+        </div>
+        <div class="cost-table-wrap">
+          <table class="cost-table">
+            <thead>
+              <tr>
+                <th>Model</th>
+                <th>Input price</th>
+                <th>Output price</th>
+                <th style="text-align:right">/ request</th>
+                <th style="text-align:right">/ day</th>
+                <th style="text-align:right">/ month</th>
+              </tr>
+            </thead>
+            <tbody>${rows}</tbody>
+          </table>
+        </div>
+        <div class="cost-overhead" id="cost-overhead"></div>
+        <div class="cost-note">
+          Input tokens: <strong>${fmtNum(currentInputTokens)}</strong> per request
+          (tool definitions + system overhead).
+          Output estimate is configurable above.
+          Prices last updated July 2025 — edit above if rates have changed.
+        </div>
       </div>
-      <div>
-        <label>Avg output tokens / request</label>
-        <input id="cost-out-tok" type="number" value="500" min="0" oninput="updateCostCard()">
-      </div>
-    </div>
-    <div class="cost-table-wrap">
-      <table class="cost-table">
-        <thead>
-          <tr>
-            <th>Model</th>
-            <th>Input price</th>
-            <th>Output price</th>
-            <th style="text-align:right">/ request</th>
-            <th style="text-align:right">/ day</th>
-            <th style="text-align:right">/ month</th>
-          </tr>
-        </thead>
-        <tbody>${rows}</tbody>
-      </table>
-    </div>
-    <div class="cost-overhead" id="cost-overhead"></div>
-    <div class="cost-note">
-      Input tokens: <strong>${fmtNum(currentInputTokens)}</strong> per request
-      (tool definitions + system overhead).
-      Output estimate is configurable above.
-      Prices last updated July 2025 — edit above if rates have changed.
     </div>
   </div>`;
 }
@@ -751,7 +765,7 @@ function onCostPriceEdit(el) {
 }
 
 function updateCostCard() {
-  if (!document.getElementById('cost-card')) return;
+  if (!document.getElementById('cost-req-day')) return;
   const reqPerDay = Math.max(1, parseInt(document.getElementById('cost-req-day')?.value) || 100);
   const outTok    = Math.max(0, parseInt(document.getElementById('cost-out-tok')?.value) || 0);
 
@@ -1141,6 +1155,7 @@ function renderResults(data, roundtripMs) {
         <span class="info-key">Roundtrip</span>
         <span class="info-val" style="color:${timingColor(roundtripMs)}">${fmtMs(roundtripMs)}</span>
       </div>
+      ${data.fetch_timing ? renderTimingSection(data.fetch_timing, data.fetch_time_ms, roundtripMs) : ''}
     </div>
 
     <div class="card">
@@ -1172,9 +1187,8 @@ function renderResults(data, roundtripMs) {
         <button class="btn-sm" onclick="copyAllTools('claude')">Copy as Claude API format</button>
         <button class="btn-sm" onclick="copyAllTools('mcp')">Copy as MCP format</button>
       </div>
+      ${renderCostCard()}
     </div>
-
-    ${renderCostCard()}
 
     ${renderScoreCard(currentTools)}
 
@@ -1803,6 +1817,39 @@ function timingColor(ms) {
   if (ms < 500)  return 'var(--success)';
   if (ms < 2000) return 'var(--warning)';
   return 'var(--error)';
+}
+
+function renderTimingSection(timing, fetchMs, roundtripMs) {
+  const networkMs = Math.max(0, (roundtripMs || 0) - (fetchMs || 0));
+  const phases = [
+    { label: 'transport_connect', ms: timing.transport_connect_ms || 0, color: 'var(--accent)' },
+    { label: 'initialize',        ms: timing.initialize_ms        || 0, color: '#d29922' },
+    { label: 'list_tools',        ms: timing.list_tools_ms        || 0, color: 'var(--success)' },
+    { label: 'list_resources',    ms: timing.list_resources_ms    || 0, color: '#a78bfa' },
+    { label: 'list_prompts',      ms: timing.list_prompts_ms      || 0, color: '#fb923c' },
+    { label: 'network_overhead',  ms: networkMs,                        color: 'var(--text-muted)' },
+  ].filter(p => p.ms > 0);
+
+  if (!phases.length) return '';
+
+  const maxMs = Math.max(...phases.map(p => p.ms), 1);
+  const totalMs = roundtripMs || 1;
+
+  const rows = phases.map(p => {
+    const barPct = Math.round(p.ms / maxMs * 100);
+    const pct    = Math.round(p.ms / totalMs * 100);
+    return `<div class="timing-row">
+      <span class="timing-label">${escHtml(p.label)}</span>
+      <div class="timing-bar-track"><div class="timing-bar-fill" style="width:${barPct}%;background:${p.color}"></div></div>
+      <span class="timing-ms">${p.ms}ms</span>
+      <span class="timing-pct">${pct}%</span>
+    </div>`;
+  }).join('');
+
+  return `<div style="margin-top:8px;padding-top:8px;border-top:1px solid var(--border)">
+    <button class="timing-toggle" onclick="const o=this.nextElementSibling.classList.toggle('open');this.textContent=(o?'▼':'▶')+' Timing breakdown'">▶ Timing breakdown</button>
+    <div class="timing-panel">${rows}</div>
+  </div>`;
 }
 function escHtml(s) {
   if (!s && s !== 0) return '';

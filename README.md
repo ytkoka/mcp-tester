@@ -14,7 +14,7 @@ Connect to any MCP server, browse its **Tools, Resources, and Prompts**, measure
 | **Prompt inspection** | Lists all prompts with arguments; fill in arguments and render the prompt messages |
 | **Token estimation** | Estimates input tokens per Claude API request (~4 chars/token heuristic) |
 | **Accurate token counting** | Calls `POST /v1/messages/count_tokens` with your Anthropic API key for exact counts |
-| **Fetch timing** | Shows MCP server fetch time and total client roundtrip time |
+| **Fetch timing** | Shows MCP server fetch time, roundtrip time, and a per-phase timing breakdown waterfall |
 | **LLM Readiness Score** | Grades tool definitions A–F across 5 dimensions; highlights which tools need improvement |
 | **Compare Mode** | Connects to two servers in parallel and compares performance, tokens, quality scores, and documentation |
 | **Multiple auth methods** | None · Bearer Token · OAuth2 Client Credentials · SSO (Authorization Code + PKCE) · Custom Header |
@@ -103,6 +103,19 @@ The **Server Info** card shows the server name, protocol version, transport used
 - **Roundtrip** — total elapsed time from the browser click to the displayed result
 
 Color coding: green < 500 ms · yellow < 2 s · red ≥ 2 s
+
+Click **▶ Timing breakdown** to expand a per-phase waterfall chart showing where time was spent:
+
+| Phase | What it measures |
+|-------|-----------------|
+| `transport_connect` | Time to enter the transport context (TCP setup for SSE; near-zero for streamable HTTP which connects lazily) |
+| `initialize` | MCP `initialize` handshake — includes the actual TCP connection for streamable HTTP |
+| `list_tools` | Time to call `tools/list` and receive all tool definitions |
+| `list_resources` | Time to call `resources/list` (shown only if server advertises resources capability) |
+| `list_prompts` | Time to call `prompts/list` (shown only if server advertises prompts capability) |
+| `network_overhead` | Roundtrip minus MCP fetch — browser↔backend network time |
+
+Each bar is scaled relative to the longest phase. The percentage column shows each phase's share of the total roundtrip.
 
 ### 2 — Browse Tools
 
