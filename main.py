@@ -725,6 +725,8 @@ async def oauth_start(req: OAuthStartRequest):
         "client_id": client_id,
         "issuer": discovery_info.get("issuer"),
         "dynamic_registration": bool(discovery_info.get("registration_endpoint") and not req.client_id),
+        "authorization_endpoint": auth_endpoint,
+        "token_endpoint": token_endpoint,
     }
 
 

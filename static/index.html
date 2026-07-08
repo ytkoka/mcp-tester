@@ -482,6 +482,23 @@ details summary::-webkit-details-marker { display: none; }
 .timing-bar-fill { height: 100%; border-radius: 4px; }
 .timing-ms { width: 48px; text-align: right; font-size: 11px; font-family: "SF Mono","Fira Code",monospace; color: var(--text); flex-shrink: 0; }
 .timing-pct { width: 32px; text-align: right; font-size: 10px; color: var(--text-dim); flex-shrink: 0; }
+
+/* ── Auth Inspector ───────────────────────────────────────────── */
+.ai-method-badge { display: inline-block; font-size: 10px; font-weight: 600; padding: 2px 7px; border-radius: 10px; background: var(--accent-dim); color: var(--accent); margin-bottom: 10px; }
+.ai-section { margin-top: 10px; padding-top: 8px; border-top: 1px solid var(--border); }
+.ai-section-label { font-size: 10px; font-weight: 600; color: var(--text-dim); text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 6px; }
+.ai-row { display: flex; gap: 6px; align-items: baseline; padding: 2px 0; font-size: 11px; }
+.ai-key { color: var(--text-dim); flex-shrink: 0; width: 70px; }
+.ai-val { color: var(--text); word-break: break-all; font-family: "SF Mono","Fira Code",monospace; font-size: 10px; flex: 1; }
+.ai-val-warn { color: var(--warning); }
+.ai-val-ok   { color: var(--success); }
+.ai-val-err  { color: var(--error); }
+.ai-token-wrap { display: flex; align-items: center; gap: 6px; flex: 1; min-width: 0; }
+.ai-token-val  { font-family: "SF Mono","Fira Code",monospace; font-size: 10px; color: var(--text); flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ai-reveal-btn { background: none; border: 1px solid var(--border); color: var(--text-muted); font-size: 10px; padding: 1px 5px; border-radius: 3px; cursor: pointer; flex-shrink: 0; }
+.ai-reveal-btn:hover { color: var(--accent); border-color: var(--accent); }
+.ai-copy-btn { background: none; border: 1px solid var(--border); color: var(--text-muted); font-size: 10px; padding: 1px 5px; border-radius: 3px; cursor: pointer; flex-shrink: 0; }
+.ai-copy-btn:hover { color: var(--success); border-color: var(--success); }
 </style>
 </head>
 <body>
@@ -555,6 +572,11 @@ details summary::-webkit-details-marker { display: none; }
       </div>
 
       <div class="divider"></div>
+
+      <div id="auth-inspector-section" style="display:none">
+        <div class="section-label" style="margin-bottom:8px">Auth Inspector</div>
+        <div id="auth-inspector-content"></div>
+      </div>
 
       <div>
         <div class="section-label" style="margin-bottom:8px">Recent Connections</div>
@@ -959,6 +981,22 @@ async function doConnect(url, auth, transport) {
   } else {
     currentConnection = { url, auth, transport };
     saveHistory(url, (data.server_info || {}).name || '');
+    // Build auth debug (SSO sets lastAuthDebug before calling doConnect)
+    if (auth.type !== 'sso') {
+      const headers = [];
+      if (auth.type === 'bearer' && auth.token)
+        headers.push({ key: 'Authorization', value: `Bearer ${auth.token}` });
+      else if (auth.type === 'header' && auth.header_name)
+        headers.push({ key: auth.header_name, value: auth.header_value || '' });
+      else if (auth.type === 'oauth2_cc')
+        headers.push({ key: 'Authorization', value: 'Bearer <fetched server-side>' });
+      const tokenVal = auth.type === 'bearer' ? auth.token : null;
+      const jwt = tokenVal ? tryDecodeJWT(tokenVal) : null;
+      const oauth = auth.type === 'oauth2_cc' ? { type: 'client_credentials', token_endpoint: auth.oauth_token_url, client_id: auth.oauth_client_id } : null;
+      showAuthInspector({ method: auth.type, headers, jwt, oauth });
+    } else {
+      if (lastAuthDebug) showAuthInspector(lastAuthDebug);
+    }
     renderResults(data, roundtripMs);
     if (document.getElementById('mode-api').checked && document.getElementById('api-key').value) {
       setTimeout(countWithAPI, 200);
@@ -1005,7 +1043,19 @@ async function handleSSOConnect(url, btn) {
     const token = await waitForSSOToken(state, popup);
     hideSSOOverlay();
     btn.innerHTML = '<span class="spinner"></span> Connecting to MCP...';
-    await doConnect(url, { type: 'bearer', token }, document.getElementById('transport').value);
+    lastAuthDebug = {
+      method: 'sso',
+      headers: [{ key: 'Authorization', value: `Bearer ${token}` }],
+      jwt: tryDecodeJWT(token),
+      oauth: {
+        issuer: startData.issuer || null,
+        authorization_endpoint: startData.authorization_endpoint || null,
+        token_endpoint: startData.token_endpoint || null,
+        client_id: startData.client_id || null,
+        dynamic_registration: startData.dynamic_registration ?? null,
+      },
+    };
+    await doConnect(url, { type: 'sso', token }, document.getElementById('transport').value);
 
   } catch (e) {
     hideSSOOverlay();
@@ -1827,6 +1877,114 @@ function fmtMs(ms) {
   if (ms >= 1000) return (ms / 1000).toFixed(2) + ' s';
   return ms + ' ms';
 }
+// ── Auth Inspector ───────────────────────────────────────────────
+let lastAuthDebug = null;
+
+function tryDecodeJWT(token) {
+  if (!token || typeof token !== 'string') return null;
+  const parts = token.split('.');
+  if (parts.length !== 3) return null;
+  try {
+    const payload = parts[1].replace(/-/g, '+').replace(/_/g, '/');
+    return JSON.parse(atob(payload));
+  } catch { return null; }
+}
+
+function maskToken(val, revealId) {
+  if (!val) return '<span class="ai-val" style="color:var(--text-dim)">—</span>';
+  const preview = val.length > 24 ? val.slice(0, 12) + '••••••••' + val.slice(-4) : val;
+  return `<div class="ai-token-wrap">
+    <span class="ai-token-val" id="${revealId}-display">${escHtml(preview)}</span>
+    <button class="ai-reveal-btn" onclick="toggleReveal('${revealId}',${JSON.stringify(val)})">show</button>
+    <button class="ai-copy-btn" onclick="navigator.clipboard.writeText(${JSON.stringify(val)}).then(()=>{this.textContent='✓';setTimeout(()=>this.textContent='copy',1200)})">copy</button>
+  </div>`;
+}
+
+function toggleReveal(id, fullVal) {
+  const el = document.getElementById(id + '-display');
+  const btn = el?.nextElementSibling;
+  if (!el || !btn) return;
+  if (btn.textContent === 'show') {
+    el.textContent = fullVal; btn.textContent = 'hide';
+  } else {
+    const preview = fullVal.length > 24 ? fullVal.slice(0, 12) + '••••••••' + fullVal.slice(-4) : fullVal;
+    el.textContent = preview; btn.textContent = 'show';
+  }
+}
+
+function fmtExpiry(exp) {
+  if (!exp) return null;
+  const expMs = exp * 1000;
+  const now = Date.now();
+  const diffMs = expMs - now;
+  const dateStr = new Date(expMs).toLocaleString();
+  if (diffMs < 0) return `<span class="ai-val ai-val-err">${dateStr} (expired)</span>`;
+  const mins = Math.floor(diffMs / 60000);
+  const hrs  = Math.floor(mins / 60);
+  const rem  = mins % 60;
+  const left = hrs > 0 ? `${hrs}h ${rem}m remaining` : `${mins}m remaining`;
+  const cls  = mins < 10 ? 'ai-val-warn' : 'ai-val-ok';
+  return `<span class="ai-val ${cls}">${dateStr} (${left})</span>`;
+}
+
+function renderAuthInspector(debug) {
+  if (!debug) return '';
+  const { method, headers, jwt, oauth } = debug;
+
+  const methodLabel = { none: 'None', bearer: 'Bearer Token', oauth2_cc: 'OAuth CC', header: 'Custom Header', sso: 'SSO (PKCE)' }[method] || method;
+
+  let html = `<span class="ai-method-badge">${escHtml(methodLabel)}</span>`;
+
+  // Headers section
+  if (headers && headers.length) {
+    html += `<div class="ai-section"><div class="ai-section-label">Headers sent</div>`;
+    headers.forEach((h, i) => {
+      const isBearer = h.key === 'Authorization' && h.value.startsWith('Bearer ');
+      const tokenVal = isBearer ? h.value.slice(7) : null;
+      if (isBearer && tokenVal && tokenVal !== '<fetched server-side>') {
+        html += `<div class="ai-row"><span class="ai-key">${escHtml(h.key)}</span>${maskToken('Bearer ' + tokenVal, 'ai-tok-' + i)}</div>`;
+      } else {
+        html += `<div class="ai-row"><span class="ai-key">${escHtml(h.key)}</span><span class="ai-val">${escHtml(h.value)}</span></div>`;
+      }
+    });
+    html += `</div>`;
+  }
+
+  // JWT claims section
+  if (jwt) {
+    html += `<div class="ai-section"><div class="ai-section-label">Token claims</div>`;
+    if (jwt.exp) html += `<div class="ai-row"><span class="ai-key">exp</span>${fmtExpiry(jwt.exp)}</div>`;
+    if (jwt.iss) html += `<div class="ai-row"><span class="ai-key">iss</span><span class="ai-val">${escHtml(jwt.iss)}</span></div>`;
+    if (jwt.sub) html += `<div class="ai-row"><span class="ai-key">sub</span><span class="ai-val">${escHtml(jwt.sub)}</span></div>`;
+    if (jwt.scope) html += `<div class="ai-row"><span class="ai-key">scope</span><span class="ai-val">${escHtml(jwt.scope)}</span></div>`;
+    if (jwt.aud)  html += `<div class="ai-row"><span class="ai-key">aud</span><span class="ai-val">${escHtml(Array.isArray(jwt.aud) ? jwt.aud.join(', ') : jwt.aud)}</span></div>`;
+    html += `</div>`;
+  }
+
+  // OAuth metadata section
+  if (oauth) {
+    html += `<div class="ai-section"><div class="ai-section-label">OAuth metadata</div>`;
+    if (oauth.issuer)                 html += `<div class="ai-row"><span class="ai-key">issuer</span><span class="ai-val">${escHtml(oauth.issuer)}</span></div>`;
+    if (oauth.authorization_endpoint) html += `<div class="ai-row"><span class="ai-key">auth URL</span><span class="ai-val">${escHtml(oauth.authorization_endpoint)}</span></div>`;
+    if (oauth.token_endpoint)         html += `<div class="ai-row"><span class="ai-key">token URL</span><span class="ai-val">${escHtml(oauth.token_endpoint)}</span></div>`;
+    if (oauth.client_id)              html += `<div class="ai-row"><span class="ai-key">client ID</span><span class="ai-val">${escHtml(oauth.client_id)}</span></div>`;
+    if (oauth.dynamic_registration != null)
+      html += `<div class="ai-row"><span class="ai-key">reg</span><span class="ai-val ${oauth.dynamic_registration ? 'ai-val-ok' : ''}">${oauth.dynamic_registration ? '✓ dynamic (auto)' : 'manual'}</span></div>`;
+    html += `</div>`;
+  }
+
+  return html;
+}
+
+function showAuthInspector(debug) {
+  lastAuthDebug = debug;
+  const section = document.getElementById('auth-inspector-section');
+  const content = document.getElementById('auth-inspector-content');
+  if (!section || !content) return;
+  content.innerHTML = renderAuthInspector(debug);
+  section.style.display = '';
+}
+
 function timingColor(ms) {
   if (ms == null) return 'var(--text)';
   if (ms < 500)  return 'var(--success)';
