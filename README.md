@@ -15,6 +15,7 @@ Connect to any MCP server, browse its **Tools, Resources, and Prompts**, measure
 | **Token estimation** | Estimates input tokens per Claude API request (~4 chars/token heuristic) |
 | **Accurate token counting** | Calls `POST /v1/messages/count_tokens` with your Anthropic API key for exact counts |
 | **Fetch timing** | Shows MCP server fetch time, roundtrip time, and a per-phase timing breakdown waterfall |
+| **Auth Inspector** | After connecting, shows the auth method used, headers sent, decoded access token claims (exp, iss, sub, scope), and OAuth endpoints; SSO access tokens are cached and reused until expiry |
 | **LLM Readiness Score** | Grades tool definitions A–F across 5 dimensions; highlights which tools need improvement |
 | **Compare Mode** | Connects to two servers in parallel and compares performance, tokens, quality scores, and documentation |
 | **Multiple auth methods** | None · Bearer Token · OAuth2 Client Credentials · SSO (Authorization Code + PKCE) · Custom Header |
@@ -117,7 +118,34 @@ Click **▶ Timing breakdown** to expand a per-phase waterfall chart showing whe
 
 Each bar is scaled relative to the longest phase. The percentage column shows each phase's share of the total roundtrip.
 
-### 2 — Browse Tools
+### 2 — Auth Inspector
+
+After a successful connection, an **Auth Inspector** section appears in the sidebar. It shows the full details of the active authentication — useful for troubleshooting auth failures and verifying that credentials are being sent as expected.
+
+#### What is displayed
+
+| Section | Content |
+|---------|---------|
+| **Auth method** | Badge showing the active method (SSO (PKCE) / Bearer Token / OAuth CC / Custom Header / None) |
+| **Headers sent** | The exact HTTP headers sent to the MCP server. Bearer / SSO access tokens are partially masked; click **show** to reveal the full value or **copy** to copy it |
+| **Access token claims** | If the token is a JWT, decoded claims are shown: `exp` (expiry with time remaining — yellow if < 10 min, red if expired), `iss`, `sub`, `scope`, `aud` |
+| **OAuth metadata** | For SSO and OAuth CC: the discovered or configured `issuer`, authorization endpoint, token endpoint, client ID, and whether Dynamic Client Registration was used |
+| **Access token validity** | For OAuth CC: the token lifetime reported by the authorization server (`expires_in`) |
+
+> **Note:** "Access token" is used throughout Auth Inspector to distinguish OAuth credentials from the AI input tokens counted in the Token Summary card.
+
+#### SSO access token caching
+
+After a successful SSO login, the access token is cached in `localStorage` keyed by the MCP server URL. On subsequent connections to the same server:
+
+- If the cached token is still valid (with a 60-second buffer before expiry), the OAuth browser popup is **skipped** and the cached token is used directly. The sidebar shows `Using cached access token (expires in Xh Xm)`.
+- If the token has expired, the full SSO flow runs again automatically.
+- Click **Force re-auth** in the Auth Inspector to clear the cached token and trigger a fresh login regardless of expiry.
+
+The cache is stored in `localStorage` under the key `mcp-token-cache` and persists across browser sessions.
+
+### 3 — Browse Tools
+
 
 Switch to the **Tools** tab. Each tool card shows:
 - Tool name and parameter count
@@ -127,7 +155,7 @@ Switch to the **Tools** tab. Each tool card shows:
 
 Use the **Search tools…** box to filter by name or description.
 
-### 3 — Browse Resources
+### 4 — Browse Resources
 
 Switch to the **Resources** tab. Each resource card shows:
 - Resource name and URI
@@ -140,7 +168,7 @@ Switch to the **Resources** tab. Each resource card shows:
 
 Use the **Search resources…** box to filter by name, URI, or description.
 
-### 4 — Browse Prompts
+### 5 — Browse Prompts
 
 Switch to the **Prompts** tab. Each prompt card shows:
 - Prompt name and argument count
@@ -152,7 +180,7 @@ Messages are displayed in a conversation view with **user** / **assistant** role
 
 Use the **Search prompts…** box to filter by name or description.
 
-### 5 — Token counting
+### 6 — Token counting
 
 **Estimate mode** (default)  
 Uses `~4 chars / token` as a rough approximation. The badge shows `~N`.
@@ -167,13 +195,13 @@ After connecting, click **Count with Claude API**. The tool makes two parallel c
 > **Note:** Per-tool counts are proportionally scaled from the accurate total.  
 > The total figure is exact; individual tool figures are an approximation within that total.
 
-### 6 — Copy tool definitions
+### 7 — Copy tool definitions
 
 In the Token Summary card or on each tool card:
 - **Copy as Claude API format** — uses `input_schema` key, ready for `anthropic.messages.create(tools=[…])`
 - **Copy as MCP format** — uses `inputSchema` key, the native MCP representation
 
-### 7 — LLM Readiness Score
+### 8 — LLM Readiness Score
 
 After connecting, a **LLM Readiness Score** card appears automatically below the Token Summary. It evaluates how well-defined the server's tools are for any LLM — before you run a single query.
 
@@ -208,7 +236,7 @@ Each dimension scores 0–100. The **Overall Score** is the weighted average.
   - *N tools have undescribed parameters*
   - *N tools missing required annotation*
 
-### 8 — Compare two servers
+### 9 — Compare two servers
 
 Click **⚡ Compare Two Servers** at the bottom of the sidebar to enter Compare Mode.  
 Both servers are scored independently and the results appear in the Quality Metrics card for easy side-by-side comparison.
