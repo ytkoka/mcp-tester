@@ -542,33 +542,45 @@ async def _discover_oauth_full(url: str) -> dict:
             except Exception:
                 continue
 
-        # 3: MCP spec — hit the resource URL, follow 401 chain
+        # 3: MCP spec — hit the resource URL, follow 401/403 chain.
+        # Streamable HTTP endpoints only accept POST, so try GET first then POST
+        # if GET doesn't yield a 401/403 with WWW-Authenticate.
         try:
-            resp = await client.get(url)
-            if resp.status_code == 401:
-                www_auth = resp.headers.get("WWW-Authenticate", "")
-                m = re.search(r'resource_metadata="([^"]+)"', www_auth)
-                if m:
-                    _assert_safe_discovery_url(m.group(1))
-                    meta_resp = await client.get(m.group(1))
-                    if meta_resp.status_code == 200:
-                        meta = meta_resp.json()
-                        as_urls = meta.get("authorization_servers", [])
-                        if as_urls:
-                            _assert_safe_discovery_url(as_urls[0])
-                            as_resp = await client.get(
-                                f"{as_urls[0]}/.well-known/oauth-authorization-server"
-                            )
-                            if as_resp.status_code == 200:
-                                d = as_resp.json()
-                                return {
-                                    "found": True,
-                                    "authorization_endpoint": d.get("authorization_endpoint"),
-                                    "token_endpoint": d.get("token_endpoint"),
-                                    "registration_endpoint": d.get("registration_endpoint"),
-                                    "issuer": d.get("issuer"),
-                                    "scopes_supported": d.get("scopes_supported", []),
-                                }
+            for attempt in ["get", "post"]:
+                if attempt == "get":
+                    resp = await client.get(url)
+                else:
+                    if resp.status_code not in (401, 403):
+                        resp = await client.post(
+                            url,
+                            json={"jsonrpc": "2.0", "method": "initialize", "id": 1},
+                            headers={"Content-Type": "application/json"},
+                        )
+                if resp.status_code in (401, 403):
+                    www_auth = resp.headers.get("WWW-Authenticate", "")
+                    m = re.search(r'resource_metadata="([^"]+)"', www_auth)
+                    if m:
+                        _assert_safe_discovery_url(m.group(1))
+                        meta_resp = await client.get(m.group(1))
+                        if meta_resp.status_code == 200:
+                            meta = meta_resp.json()
+                            as_urls = meta.get("authorization_servers", [])
+                            if as_urls:
+                                _assert_safe_discovery_url(as_urls[0])
+                                as_resp = await client.get(
+                                    f"{as_urls[0]}/.well-known/oauth-authorization-server"
+                                )
+                                if as_resp.status_code == 200:
+                                    d = as_resp.json()
+                                    return {
+                                        "found": True,
+                                        "authorization_endpoint": d.get("authorization_endpoint"),
+                                        "token_endpoint": d.get("token_endpoint"),
+                                        "registration_endpoint": d.get("registration_endpoint"),
+                                        "issuer": d.get("issuer"),
+                                        "scopes_supported": d.get("scopes_supported", []),
+                                    }
+                    break  # 401/403 received but no usable metadata — stop here
         except Exception:
             pass
 
