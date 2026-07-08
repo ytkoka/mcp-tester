@@ -1017,7 +1017,7 @@ async function handleSSOConnect(url, btn) {
     const jwt = tryDecodeJWT(cached.token);
     const expiresAt = cached.expiresAt;
     const minsLeft = expiresAt ? Math.round((expiresAt - Date.now()) / 60000) : null;
-    setSSOStatusMsg(`✓ キャッシュ済みトークンを使用 ${minsLeft != null ? `(残り約 ${minsLeft >= 60 ? Math.floor(minsLeft/60)+'h '+minsLeft%60+'m' : minsLeft+'m'})` : ''}`);
+    setSSOStatusMsg(`✓ Using cached access token ${minsLeft != null ? `(expires in ${minsLeft >= 60 ? Math.floor(minsLeft/60)+'h '+minsLeft%60+'m' : minsLeft+'m'})` : ''}`);
     lastAuthDebug = {
       method: 'sso', cached: true, expiresAt,
       headers: [{ key: 'Authorization', value: `Bearer ${cached.token}` }],
@@ -1986,7 +1986,7 @@ function forceReauth() {
   if (url) clearCachedToken(url);
   lastAuthDebug = null;
   document.getElementById('auth-inspector-section').style.display = 'none';
-  setSSOStatusMsg('キャッシュを削除しました。再度 Connect してください。');
+  setSSOStatusMsg('Cached access token cleared — please reconnect.');
 }
 
 function renderAuthInspector(debug) {
@@ -2015,7 +2015,7 @@ function renderAuthInspector(debug) {
 
   // JWT claims section
   if (jwt) {
-    html += `<div class="ai-section"><div class="ai-section-label">Token claims</div>`;
+    html += `<div class="ai-section"><div class="ai-section-label">Access token claims</div>`;
     if (jwt.exp) html += `<div class="ai-row"><span class="ai-key">exp</span>${fmtExpiry(jwt.exp)}</div>`;
     if (jwt.iss) html += `<div class="ai-row"><span class="ai-key">iss</span><span class="ai-val">${escHtml(jwt.iss)}</span></div>`;
     if (jwt.sub) html += `<div class="ai-row"><span class="ai-key">sub</span><span class="ai-val">${escHtml(jwt.sub)}</span></div>`;
@@ -2039,14 +2039,14 @@ function renderAuthInspector(debug) {
   // Expiry info for OAuth CC (from backend expires_in)
   if (debug.cc_expires_in != null) {
     const expAt = debug.cc_expires_in ? Date.now() + debug.cc_expires_in * 1000 : null;
-    if (expAt) html += `<div class="ai-section"><div class="ai-section-label">Token validity</div>${fmtExpiry(expAt / 1000)}</div>`;
+    if (expAt) html += `<div class="ai-section"><div class="ai-section-label">Access token validity</div>${fmtExpiry(expAt / 1000)}</div>`;
   }
 
   // Cache controls for SSO
   if (method === 'sso') {
     html += `<div class="ai-section">
       <button class="ai-reveal-btn" style="font-size:11px;padding:3px 8px" onclick="forceReauth()">Force re-auth</button>
-      <span style="font-size:10px;color:var(--text-dim);margin-left:6px">キャッシュを削除して再認証</span>
+      <span style="font-size:10px;color:var(--text-dim);margin-left:6px">Clear cached access token and re-authenticate</span>
     </div>`;
   }
 
