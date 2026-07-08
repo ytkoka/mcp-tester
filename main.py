@@ -554,13 +554,17 @@ async def _discover_oauth_full(url: str) -> dict:
             target = f"{base}{path}"
             try:
                 resp = await client.get(target)
+                logger.info("[oauth-discover] Step1/2 GET %s → %s", target, resp.status_code)
                 if resp.status_code == 200:
                     result = _build_result(resp.json())
+                    logger.info("[oauth-discover] Step1/2 scopes_supported: %s", result["scopes_supported"])
                     if result["scopes_supported"]:
                         # Complete AS metadata — no need to proceed further
+                        logger.info("[oauth-discover] Step1/2 complete — returning without Step3")
                         return result
                     # Partial metadata (no scopes_supported): save as fallback
                     # and continue to Step 3 to reach the real AS via RFC 9728 chain
+                    logger.info("[oauth-discover] Step1/2 partial — continuing to Step3")
                     if fallback is None:
                         fallback = result
             except Exception:
