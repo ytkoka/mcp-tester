@@ -142,7 +142,7 @@ After a successful SSO login, the access token is cached in `localStorage` keyed
 - If the token has expired, the full SSO flow runs again automatically.
 - Click **Force re-auth** in the Auth Inspector to clear the cached token and trigger a fresh login regardless of expiry.
 
-The cache is stored in `localStorage` under the key `mcp-token-cache` and persists across browser sessions.
+The cache is stored in `sessionStorage` under the key `mcp-token-cache`. It is scoped to the current browser tab and is automatically cleared when the tab or window is closed.
 
 ### 3 — Browse Tools
 

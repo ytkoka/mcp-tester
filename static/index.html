@@ -1912,7 +1912,7 @@ function fmtMs(ms) {
 }
 // ── Token cache ──────────────────────────────────────────────────
 function loadTokenCache() {
-  try { return JSON.parse(localStorage.getItem('mcp-token-cache') || '{}'); } catch { return {}; }
+  try { return JSON.parse(sessionStorage.getItem('mcp-token-cache') || '{}'); } catch { return {}; }
 }
 function getCachedToken(url) {
   const entry = loadTokenCache()[url];
@@ -1923,12 +1923,12 @@ function getCachedToken(url) {
 function setCachedToken(url, token, expiresAt, oauthMeta) {
   const cache = loadTokenCache();
   cache[url] = { token, expiresAt: expiresAt || null, oauthMeta: oauthMeta || null };
-  localStorage.setItem('mcp-token-cache', JSON.stringify(cache));
+  sessionStorage.setItem('mcp-token-cache', JSON.stringify(cache));
 }
 function clearCachedToken(url) {
   const cache = loadTokenCache();
   delete cache[url];
-  localStorage.setItem('mcp-token-cache', JSON.stringify(cache));
+  sessionStorage.setItem('mcp-token-cache', JSON.stringify(cache));
 }
 
 // ── Auth Inspector ───────────────────────────────────────────────
