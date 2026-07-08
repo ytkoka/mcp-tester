@@ -1452,6 +1452,14 @@ async function readResource(idx) {
   }
 }
 
+function renderImageSafely(mimeType, data) {
+  const mime = (mimeType || '').toLowerCase();
+  if (mime.startsWith('image/') && !mime.includes('svg')) {
+    return `<img src="data:${escHtml(mimeType)};base64,${escHtml(data || '')}" style="max-width:100%;border-radius:4px;margin-top:4px" />`;
+  }
+  return `<div class="result-block" style="color:var(--text-dim);font-style:italic">SVG preview is disabled for security · ${escHtml(mimeType || 'unknown type')}</div>`;
+}
+
 function renderResourceResult(idx, data, elapsed) {
   const contentEl = document.getElementById(`res-result-content-${idx}`);
   const resultEl  = document.getElementById(`res-result-${idx}`);
@@ -1465,8 +1473,8 @@ function renderResourceResult(idx, data, elapsed) {
       html += `<div class="result-block">${escHtml(display)}</div>`;
     } else if (item.type === 'blob') {
       const mime = item.mimeType || '';
-      if (mime.startsWith('image/') && !mime.includes('svg')) {
-        html += `<img src="data:${escHtml(mime)};base64,${escHtml(item.blob)}" style="max-width:100%;border-radius:4px;margin-top:4px" />`;
+      if (mime.startsWith('image/')) {
+        html += renderImageSafely(mime, item.blob);
       } else {
         html += `<div class="result-block" style="color:var(--text-dim);font-style:italic">Binary blob · ${escHtml(mime || 'unknown type')}</div>`;
       }
@@ -1630,8 +1638,8 @@ function renderPromptResult(idx, data, elapsed) {
     let body = '';
     if (msg.type === 'text') {
       body = `<div class="msg-text">${escHtml(msg.text)}</div>`;
-    } else if (msg.type === 'image' && msg.mimeType && !msg.mimeType.includes('svg')) {
-      body = `<img src="data:${escHtml(msg.mimeType)};base64,${escHtml(msg.data)}" style="max-width:100%;border-radius:4px" />`;
+    } else if (msg.type === 'image' && msg.mimeType) {
+      body = renderImageSafely(msg.mimeType, msg.data);
     } else {
       body = `<div class="msg-text">${syntaxHighlight(msg)}</div>`;
     }
@@ -1876,7 +1884,7 @@ function renderExecResult(idx, data, roundtripMs) {
       try { display = JSON.stringify(JSON.parse(item.text), null, 2); } catch {}
       html += `<div class="result-block${data.is_error ? ' is-error' : ''}">${escHtml(display)}</div>`;
     } else if (item.type === 'image') {
-      html += `<img src="data:${escHtml(item.mimeType)};base64,${escHtml(item.data)}" style="max-width:100%;border-radius:4px;margin-top:4px" />`;
+      html += renderImageSafely(item.mimeType, item.data);
     } else {
       html += `<div class="result-block">${syntaxHighlight(item)}</div>`;
     }
