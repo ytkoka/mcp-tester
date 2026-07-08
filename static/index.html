@@ -1999,46 +1999,54 @@ function parseScopeList(jwt) {
 function renderScopeCheck(jwt, oauth) {
   const granted   = parseScopeList(jwt);
   const supported = (oauth && oauth.scopes_supported) || [];
-  console.log('granted:', granted);
-  console.log('supported:', supported, Array.isArray(supported), supported?.length);
 
   if (!granted.length) return '';
 
-  const undeclared = supported.length
-    ? granted.filter(s => !supported.includes(s))
-    : [];
-
   let html = `<div class="ai-section"><div class="ai-section-label">Scope check</div>`;
 
-  // Granted scopes row-by-row
-  granted.forEach(s => {
-    const bad = undeclared.includes(s);
-    html += `<div class="ai-row">
-      <span class="ai-key" style="width:auto;margin-right:6px">
-        <span style="font-family:'SF Mono','Fira Code',monospace;font-size:10px;
-          background:${bad ? 'rgba(248,81,73,0.15)' : 'var(--surface2)'};
-          color:${bad ? 'var(--error)' : 'var(--text)'};
-          padding:1px 6px;border-radius:3px">${escHtml(s)}</span>
-      </span>
-      ${bad
-        ? `<span style="font-size:10px;color:var(--error);font-weight:600">⚠ Undeclared scope</span>`
-        : `<span style="font-size:10px;color:var(--success)">✓ declared</span>`}
-    </div>`;
-  });
+  if (supported.length > 0) {
+    // Can validate: show declared / undeclared status per scope
+    const undeclared = granted.filter(s => !supported.includes(s));
 
-  if (undeclared.length) {
-    html += `<div style="margin-top:8px;padding:6px 8px;background:rgba(248,81,73,0.1);
-      border:1px solid rgba(248,81,73,0.3);border-radius:4px;font-size:11px;color:var(--error)">
-      <strong>⚠ ${undeclared.length} undeclared scope${undeclared.length > 1 ? 's' : ''}</strong>
-      — granted by server but absent from <code>scopes_supported</code>.
-      This may indicate a metadata mismatch.
-    </div>`;
-  } else if (supported.length) {
-    html += `<div style="margin-top:6px;font-size:10px;color:var(--text-dim)">
-      All granted scopes are declared in server metadata
-      (${supported.length} supported total).
-    </div>`;
+    granted.forEach(s => {
+      const bad = undeclared.includes(s);
+      html += `<div class="ai-row">
+        <span class="ai-key" style="width:auto;margin-right:6px">
+          <span style="font-family:'SF Mono','Fira Code',monospace;font-size:10px;
+            background:${bad ? 'rgba(248,81,73,0.15)' : 'var(--surface2)'};
+            color:${bad ? 'var(--error)' : 'var(--text)'};
+            padding:1px 6px;border-radius:3px">${escHtml(s)}</span>
+        </span>
+        ${bad
+          ? `<span style="font-size:10px;color:var(--error);font-weight:600">⚠ Undeclared scope</span>`
+          : `<span style="font-size:10px;color:var(--success)">✓ declared</span>`}
+      </div>`;
+    });
+
+    if (undeclared.length) {
+      html += `<div style="margin-top:8px;padding:6px 8px;background:rgba(248,81,73,0.1);
+        border:1px solid rgba(248,81,73,0.3);border-radius:4px;font-size:11px;color:var(--error)">
+        <strong>⚠ ${undeclared.length} undeclared scope${undeclared.length > 1 ? 's' : ''}</strong>
+        — granted by server but absent from <code>scopes_supported</code>.
+        This may indicate a metadata mismatch.
+      </div>`;
+    } else {
+      html += `<div style="margin-top:6px;font-size:10px;color:var(--text-dim)">
+        All granted scopes are declared in server metadata
+        (${supported.length} supported total).
+      </div>`;
+    }
   } else {
+    // Cannot validate: list scopes without declared/undeclared judgement
+    granted.forEach(s => {
+      html += `<div class="ai-row">
+        <span class="ai-key" style="width:auto;margin-right:6px">
+          <span style="font-family:'SF Mono','Fira Code',monospace;font-size:10px;
+            background:var(--surface2);color:var(--text);
+            padding:1px 6px;border-radius:3px">${escHtml(s)}</span>
+        </span>
+      </div>`;
+    });
     html += `<div style="margin-top:6px;font-size:10px;color:var(--text-dim)">
       Server did not advertise <code>scopes_supported</code> — cannot validate.
     </div>`;
