@@ -514,19 +514,21 @@ def _assert_http_scheme(url: str) -> None:
 
 async def _discover_oauth_full(url: str) -> dict:
     """
-    OAuth discovery in three steps:
+    OAuth discovery — RFC 9728 chain has highest priority:
 
-      1. RFC 8414  /.well-known/oauth-authorization-server on the server origin
-      2. OIDC      /.well-known/openid-configuration on the server origin
-         → Return immediately only when scopes_supported is present (complete metadata).
-           If the response is partial (no scopes_supported), save as fallback and
-           continue to Step 3.
+      Step 3 (highest priority — always attempted):
+        RFC 9728: resource URL → 401 WWW-Authenticate → resource_metadata URL
+        → Protected Resource Metadata → authorization_servers
+        → AS /.well-known/oauth-authorization-server
+        All URLs derived from server-provided headers; no subdomain guessing.
+        Returns immediately when authorization_servers can be traced.
 
-      3. RFC 9728  Hit the resource URL → 401 WWW-Authenticate → resource_metadata URL
-                   → Protected Resource Metadata → authorization_servers
-                   → AS /.well-known/oauth-authorization-server
-         → Step 3 URL is always derived from the WWW-Authenticate header.
-           No subdomain inference or domain guessing is performed.
+      Steps 1 & 2 (fallback only — never trigger early return):
+        RFC 8414 /.well-known/oauth-authorization-server
+        OIDC    /.well-known/openid-configuration
+        Saved as fallback regardless of whether scopes_supported is present.
+        Used only when Step 3 cannot reach an AS. Both are treated equally because
+        either may serve a scopes_supported that differs from the real AS.
 
     Returns dict with found, authorization_endpoint, token_endpoint,
     registration_endpoint, issuer, scopes_supported.
@@ -546,7 +548,9 @@ async def _discover_oauth_full(url: str) -> dict:
         }
 
     async with httpx.AsyncClient(follow_redirects=True, timeout=6.0) as client:
-        # Steps 1 & 2: well-known endpoints on the server origin
+        # Steps 1 & 2: collect fallback candidates — never early return.
+        # Step 3 (RFC 9728 chain) always runs and takes priority when it can trace
+        # authorization_servers. Prefer a fallback that has scopes_supported.
         for path in [
             "/.well-known/oauth-authorization-server",
             "/.well-known/openid-configuration",
@@ -554,27 +558,18 @@ async def _discover_oauth_full(url: str) -> dict:
             target = f"{base}{path}"
             try:
                 resp = await client.get(target)
-                logger.info("[oauth-discover] Step1/2 GET %s → %s", target, resp.status_code)
                 if resp.status_code == 200:
                     result = _build_result(resp.json())
-                    logger.info("[oauth-discover] Step1/2 scopes_supported: %s", result["scopes_supported"])
-                    if result["scopes_supported"]:
-                        # Complete AS metadata — no need to proceed further
-                        logger.info("[oauth-discover] Step1/2 complete — returning without Step3")
-                        return result
-                    # Partial metadata (no scopes_supported): save as fallback
-                    # and continue to Step 3 to reach the real AS via RFC 9728 chain
-                    logger.info("[oauth-discover] Step1/2 partial — continuing to Step3")
-                    if fallback is None:
+                    if fallback is None or (result["scopes_supported"] and not fallback["scopes_supported"]):
                         fallback = result
+                    logger.info("[oauth-discover] Step1/2 %s → 200 | scopes_supported: %d (saved as fallback)",
+                                path, len(result["scopes_supported"]))
             except Exception:
                 continue
 
-        # Step 3: RFC 9728 Protected Resource Metadata chain.
-        # Hit the MCP resource URL (GET first; POST if needed for Streamable HTTP),
-        # parse WWW-Authenticate for the resource_metadata URL, fetch the Protected
-        # Resource Metadata document, follow authorization_servers to the real AS.
-        # All URLs come from server-provided headers — no subdomain guessing.
+        # Step 3: RFC 9728 chain — always attempted, result takes priority over Step 1/2.
+        # GET first; POST if needed for Streamable HTTP endpoints that ignore GET.
+        # All URLs come exclusively from server-provided headers.
         try:
             for attempt in ["get", "post"]:
                 if attempt == "get":
@@ -610,7 +605,7 @@ async def _discover_oauth_full(url: str) -> dict:
                                     if as_resp.status_code == 200 else []
                                 )
                                 logger.info(
-                                    "[oauth-discover] Step3: AS metadata %s → %s | scopes_supported: %d scope(s): %s",
+                                    "[oauth-discover] Step3: AS metadata %s → %s | scopes_supported: %d: %s",
                                     as_well_known, as_resp.status_code, len(scopes), scopes,
                                 )
                                 if as_resp.status_code == 200:
@@ -619,8 +614,10 @@ async def _discover_oauth_full(url: str) -> dict:
         except Exception as e:
             logger.info("[oauth-discover] Step3 error: %s", e)
 
-    # Step 3 did not yield AS metadata — use Step 1/2 partial result if available
+    # Step 3 did not reach the AS — use Step 1/2 fallback if available
     if fallback:
+        logger.info("[oauth-discover] Using Step1/2 fallback | scopes_supported: %d",
+                    len(fallback["scopes_supported"]))
         return fallback
 
     return {"found": False}
