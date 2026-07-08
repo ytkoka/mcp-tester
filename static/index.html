@@ -997,7 +997,8 @@ async function doConnect(url, auth, transport) {
       const tokenVal = auth.type === 'bearer' ? auth.token : null;
       const jwt = tokenVal ? tryDecodeJWT(tokenVal) : null;
       const oauth = auth.type === 'oauth2_cc' ? { type: 'client_credentials', token_endpoint: auth.oauth_token_url, client_id: auth.oauth_client_id } : null;
-      showAuthInspector({ method: auth.type, headers, jwt, oauth });
+      const ccExpiresIn = auth.type === 'oauth2_cc' ? (data.auth_token_info?.expires_in ?? null) : undefined;
+      showAuthInspector({ method: auth.type, headers, jwt, oauth, cc_expires_in: ccExpiresIn });
     }
     renderResults(data, roundtripMs);
     if (document.getElementById('mode-api').checked && document.getElementById('api-key').value) {
@@ -1008,6 +1009,31 @@ async function doConnect(url, auth, transport) {
 
 // ── SSO flow ─────────────────────────────────────────────────────
 async function handleSSOConnect(url, btn) {
+  // Check token cache first — skip OAuth popup if still valid
+  const cached = getCachedToken(url);
+  if (cached) {
+    btn.disabled = true;
+    btn.innerHTML = '<span class="spinner"></span> Connecting...';
+    const jwt = tryDecodeJWT(cached.token);
+    const expiresAt = cached.expiresAt;
+    const minsLeft = expiresAt ? Math.round((expiresAt - Date.now()) / 60000) : null;
+    setSSOStatusMsg(`✓ キャッシュ済みトークンを使用 ${minsLeft != null ? `(残り約 ${minsLeft >= 60 ? Math.floor(minsLeft/60)+'h '+minsLeft%60+'m' : minsLeft+'m'})` : ''}`);
+    lastAuthDebug = {
+      method: 'sso', cached: true, expiresAt,
+      headers: [{ key: 'Authorization', value: `Bearer ${cached.token}` }],
+      jwt, oauth: cached.oauthMeta,
+    };
+    try {
+      await doConnect(url, { type: 'bearer', token: cached.token }, document.getElementById('transport').value);
+    } catch (e) {
+      showError(e.message || 'Network error');
+    } finally {
+      btn.disabled = false;
+      btn.textContent = 'Connect & Fetch Tools';
+    }
+    return;
+  }
+
   const redirectUri = document.getElementById('sso_redirect_uri')?.value || `${window.location.origin}/oauth/callback`;
   const body = {
     mcp_url: url, redirect_uri: redirectUri,
@@ -1045,17 +1071,22 @@ async function handleSSOConnect(url, btn) {
     const token = await waitForSSOToken(state, popup);
     hideSSOOverlay();
     btn.innerHTML = '<span class="spinner"></span> Connecting to MCP...';
+
+    const jwt = tryDecodeJWT(token);
+    const expiresAt = jwt?.exp ? jwt.exp * 1000 : Date.now() + 3_600_000;
+    const oauthMeta = {
+      issuer: startData.issuer || null,
+      authorization_endpoint: startData.authorization_endpoint || null,
+      token_endpoint: startData.token_endpoint || null,
+      client_id: startData.client_id || null,
+      dynamic_registration: startData.dynamic_registration ?? null,
+    };
+    setCachedToken(url, token, expiresAt, oauthMeta);
+
     lastAuthDebug = {
-      method: 'sso',
+      method: 'sso', cached: false, expiresAt,
       headers: [{ key: 'Authorization', value: `Bearer ${token}` }],
-      jwt: tryDecodeJWT(token),
-      oauth: {
-        issuer: startData.issuer || null,
-        authorization_endpoint: startData.authorization_endpoint || null,
-        token_endpoint: startData.token_endpoint || null,
-        client_id: startData.client_id || null,
-        dynamic_registration: startData.dynamic_registration ?? null,
-      },
+      jwt, oauth: oauthMeta,
     };
     await doConnect(url, { type: 'bearer', token }, document.getElementById('transport').value);
 
@@ -1879,6 +1910,27 @@ function fmtMs(ms) {
   if (ms >= 1000) return (ms / 1000).toFixed(2) + ' s';
   return ms + ' ms';
 }
+// ── Token cache ──────────────────────────────────────────────────
+function loadTokenCache() {
+  try { return JSON.parse(localStorage.getItem('mcp-token-cache') || '{}'); } catch { return {}; }
+}
+function getCachedToken(url) {
+  const entry = loadTokenCache()[url];
+  if (!entry || !entry.token) return null;
+  if (entry.expiresAt && Date.now() > entry.expiresAt - 60_000) return null; // 60s buffer
+  return entry;
+}
+function setCachedToken(url, token, expiresAt, oauthMeta) {
+  const cache = loadTokenCache();
+  cache[url] = { token, expiresAt: expiresAt || null, oauthMeta: oauthMeta || null };
+  localStorage.setItem('mcp-token-cache', JSON.stringify(cache));
+}
+function clearCachedToken(url) {
+  const cache = loadTokenCache();
+  delete cache[url];
+  localStorage.setItem('mcp-token-cache', JSON.stringify(cache));
+}
+
 // ── Auth Inspector ───────────────────────────────────────────────
 let lastAuthDebug = null;
 
@@ -1929,13 +1981,22 @@ function fmtExpiry(exp) {
   return `<span class="ai-val ${cls}">${dateStr} (${left})</span>`;
 }
 
+function forceReauth() {
+  const url = document.getElementById('url')?.value.trim();
+  if (url) clearCachedToken(url);
+  lastAuthDebug = null;
+  document.getElementById('auth-inspector-section').style.display = 'none';
+  setSSOStatusMsg('キャッシュを削除しました。再度 Connect してください。');
+}
+
 function renderAuthInspector(debug) {
   if (!debug) return '';
-  const { method, headers, jwt, oauth } = debug;
+  const { method, headers, jwt, oauth, cached, expiresAt } = debug;
 
   const methodLabel = { none: 'None', bearer: 'Bearer Token', oauth2_cc: 'OAuth CC', header: 'Custom Header', sso: 'SSO (PKCE)' }[method] || method;
 
   let html = `<span class="ai-method-badge">${escHtml(methodLabel)}</span>`;
+  if (cached) html += ` <span class="ai-method-badge" style="background:rgba(63,185,80,0.15);color:var(--success)">cached</span>`;
 
   // Headers section
   if (headers && headers.length) {
@@ -1973,6 +2034,20 @@ function renderAuthInspector(debug) {
     if (oauth.dynamic_registration != null)
       html += `<div class="ai-row"><span class="ai-key">reg</span><span class="ai-val ${oauth.dynamic_registration ? 'ai-val-ok' : ''}">${oauth.dynamic_registration ? '✓ dynamic (auto)' : 'manual'}</span></div>`;
     html += `</div>`;
+  }
+
+  // Expiry info for OAuth CC (from backend expires_in)
+  if (debug.cc_expires_in != null) {
+    const expAt = debug.cc_expires_in ? Date.now() + debug.cc_expires_in * 1000 : null;
+    if (expAt) html += `<div class="ai-section"><div class="ai-section-label">Token validity</div>${fmtExpiry(expAt / 1000)}</div>`;
+  }
+
+  // Cache controls for SSO
+  if (method === 'sso') {
+    html += `<div class="ai-section">
+      <button class="ai-reveal-btn" style="font-size:11px;padding:3px 8px" onclick="forceReauth()">Force re-auth</button>
+      <span style="font-size:10px;color:var(--text-dim);margin-left:6px">キャッシュを削除して再認証</span>
+    </div>`;
   }
 
   return html;

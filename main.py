@@ -117,7 +117,7 @@ def estimate_tool_tokens(tool: dict) -> int:
     return estimate_tokens(json.dumps(claude_format, ensure_ascii=False)) + 20
 
 
-async def fetch_oauth_token(auth: AuthConfig) -> str:
+async def fetch_oauth_token(auth: AuthConfig) -> tuple[str, int | None]:
     async with httpx.AsyncClient() as client:
         data: dict[str, str] = {
             "grant_type": "client_credentials",
@@ -128,19 +128,22 @@ async def fetch_oauth_token(auth: AuthConfig) -> str:
             data["scope"] = auth.oauth_scope
         resp = await client.post(auth.oauth_token_url or "", data=data, timeout=30.0)
         resp.raise_for_status()
-        return resp.json()["access_token"]
+        body = resp.json()
+        return body["access_token"], body.get("expires_in")
 
 
-async def build_headers(auth: AuthConfig) -> dict[str, str]:
+async def build_headers(auth: AuthConfig) -> tuple[dict[str, str], dict | None]:
     headers: dict[str, str] = {}
+    token_info: dict | None = None
     if auth.type == "bearer" and auth.token:
         headers["Authorization"] = f"Bearer {auth.token}"
     elif auth.type == "header" and auth.header_name and auth.header_value:
         headers[auth.header_name] = auth.header_value
     elif auth.type == "oauth2_cc":
-        token = await fetch_oauth_token(auth)
+        token, expires_in = await fetch_oauth_token(auth)
         headers["Authorization"] = f"Bearer {token}"
-    return headers
+        token_info = {"expires_in": expires_in}
+    return headers, token_info
 
 
 def tool_to_dict(tool: Any) -> dict[str, Any]:
@@ -882,7 +885,7 @@ async def count_tokens_api(req: CountTokensRequest):
 @app.post("/api/connect")
 async def connect_to_mcp(req: ConnectRequest):
     try:
-        headers = await build_headers(req.auth)
+        headers, token_info = await build_headers(req.auth)
 
         t0 = time.perf_counter()
         tools_raw, resources_raw, prompts_raw, server_info, transport_used, fetch_timing = await connect_and_list_primitives(
@@ -911,6 +914,7 @@ async def connect_to_mcp(req: ConnectRequest):
             "transport_used": transport_used,
             "fetch_time_ms": fetch_ms,
             "fetch_timing": fetch_timing,
+            "auth_token_info": token_info,
             "server_info": server_info,
             "tool_count": len(tools),
             "tools": tools,
@@ -935,7 +939,7 @@ async def connect_to_mcp(req: ConnectRequest):
 @app.post("/api/execute")
 async def execute_tool_api(req: ExecuteRequest):
     try:
-        headers = await build_headers(req.auth)
+        headers, token_info = await build_headers(req.auth)
         t0 = time.perf_counter()
         result, transport_used = await call_tool_on_server(
             req.url, headers, req.transport, req.tool_name, req.tool_args
@@ -961,7 +965,7 @@ async def execute_tool_api(req: ExecuteRequest):
 @app.post("/api/resources/read")
 async def read_resource_api(req: ReadResourceRequest):
     try:
-        headers = await build_headers(req.auth)
+        headers, token_info = await build_headers(req.auth)
         t0 = time.perf_counter()
         result, transport_used = await call_read_resource_on_server(
             req.url, headers, req.transport, req.resource_uri
@@ -986,7 +990,7 @@ async def read_resource_api(req: ReadResourceRequest):
 @app.post("/api/prompts/get")
 async def get_prompt_api(req: GetPromptRequest):
     try:
-        headers = await build_headers(req.auth)
+        headers, token_info = await build_headers(req.auth)
         t0 = time.perf_counter()
         result, transport_used = await call_get_prompt_on_server(
             req.url, headers, req.transport, req.prompt_name, req.prompt_args
