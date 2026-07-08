@@ -1080,6 +1080,7 @@ async function handleSSOConnect(url, btn) {
       token_endpoint: startData.token_endpoint || null,
       client_id: startData.client_id || null,
       dynamic_registration: startData.dynamic_registration ?? null,
+      scopes_supported: startData.scopes_supported || [],
     };
     setCachedToken(url, token, expiresAt, oauthMeta);
 
@@ -1989,6 +1990,62 @@ function fmtExpiry(exp) {
   return `<span class="ai-val ${cls}">${dateStr} (${left})</span>`;
 }
 
+function parseScopeList(jwt) {
+  const raw = (jwt && (jwt.scope || jwt.scp)) || '';
+  if (Array.isArray(raw)) return raw.filter(Boolean);
+  return raw ? raw.split(/\s+/).filter(Boolean) : [];
+}
+
+function renderScopeCheck(jwt, oauth) {
+  const granted   = parseScopeList(jwt);
+  const supported = (oauth && oauth.scopes_supported) || [];
+
+  if (!granted.length) return '';
+
+  const undeclared = supported.length
+    ? granted.filter(s => !supported.includes(s))
+    : [];
+
+  let html = `<div class="ai-section"><div class="ai-section-label">Scope check</div>`;
+
+  // Granted scopes row-by-row
+  granted.forEach(s => {
+    const bad = undeclared.includes(s);
+    html += `<div class="ai-row">
+      <span class="ai-key" style="width:auto;margin-right:6px">
+        <span style="font-family:'SF Mono','Fira Code',monospace;font-size:10px;
+          background:${bad ? 'rgba(248,81,73,0.15)' : 'var(--surface2)'};
+          color:${bad ? 'var(--error)' : 'var(--text)'};
+          padding:1px 6px;border-radius:3px">${escHtml(s)}</span>
+      </span>
+      ${bad
+        ? `<span style="font-size:10px;color:var(--error);font-weight:600">⚠ Undeclared scope</span>`
+        : `<span style="font-size:10px;color:var(--success)">✓ declared</span>`}
+    </div>`;
+  });
+
+  if (undeclared.length) {
+    html += `<div style="margin-top:8px;padding:6px 8px;background:rgba(248,81,73,0.1);
+      border:1px solid rgba(248,81,73,0.3);border-radius:4px;font-size:11px;color:var(--error)">
+      <strong>⚠ ${undeclared.length} undeclared scope${undeclared.length > 1 ? 's' : ''}</strong>
+      — granted by server but absent from <code>scopes_supported</code>.
+      This may indicate a metadata mismatch.
+    </div>`;
+  } else if (supported.length) {
+    html += `<div style="margin-top:6px;font-size:10px;color:var(--text-dim)">
+      All granted scopes are declared in server metadata
+      (${supported.length} supported total).
+    </div>`;
+  } else {
+    html += `<div style="margin-top:6px;font-size:10px;color:var(--text-dim)">
+      Server did not advertise <code>scopes_supported</code> — cannot validate.
+    </div>`;
+  }
+
+  html += `</div>`;
+  return html;
+}
+
 function forceReauth() {
   const url = document.getElementById('url')?.value.trim();
   if (url) clearCachedToken(url);
@@ -2027,10 +2084,12 @@ function renderAuthInspector(debug) {
     if (jwt.exp) html += `<div class="ai-row"><span class="ai-key">exp</span>${fmtExpiry(jwt.exp)}</div>`;
     if (jwt.iss) html += `<div class="ai-row"><span class="ai-key">iss</span><span class="ai-val">${escHtml(jwt.iss)}</span></div>`;
     if (jwt.sub) html += `<div class="ai-row"><span class="ai-key">sub</span><span class="ai-val">${escHtml(jwt.sub)}</span></div>`;
-    if (jwt.scope) html += `<div class="ai-row"><span class="ai-key">scope</span><span class="ai-val">${escHtml(jwt.scope)}</span></div>`;
     if (jwt.aud)  html += `<div class="ai-row"><span class="ai-key">aud</span><span class="ai-val">${escHtml(Array.isArray(jwt.aud) ? jwt.aud.join(', ') : jwt.aud)}</span></div>`;
     html += `</div>`;
   }
+
+  // Scope consistency check
+  if (jwt) html += renderScopeCheck(jwt, oauth);
 
   // OAuth metadata section
   if (oauth) {
