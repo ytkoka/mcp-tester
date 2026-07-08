@@ -981,8 +981,12 @@ async function doConnect(url, auth, transport) {
   } else {
     currentConnection = { url, auth, transport };
     saveHistory(url, (data.server_info || {}).name || '');
-    // Build auth debug (SSO sets lastAuthDebug before calling doConnect)
-    if (auth.type !== 'sso') {
+    // SSO sets lastAuthDebug (with OAuth metadata) before calling doConnect.
+    // Detect SSO by checking lastAuthDebug.method to preserve that richer info.
+    if (lastAuthDebug && lastAuthDebug.method === 'sso' &&
+        auth.type === 'bearer' && auth.token === (lastAuthDebug.headers[0]?.value || '').slice(7)) {
+      showAuthInspector(lastAuthDebug);
+    } else {
       const headers = [];
       if (auth.type === 'bearer' && auth.token)
         headers.push({ key: 'Authorization', value: `Bearer ${auth.token}` });
@@ -994,8 +998,6 @@ async function doConnect(url, auth, transport) {
       const jwt = tokenVal ? tryDecodeJWT(tokenVal) : null;
       const oauth = auth.type === 'oauth2_cc' ? { type: 'client_credentials', token_endpoint: auth.oauth_token_url, client_id: auth.oauth_client_id } : null;
       showAuthInspector({ method: auth.type, headers, jwt, oauth });
-    } else {
-      if (lastAuthDebug) showAuthInspector(lastAuthDebug);
     }
     renderResults(data, roundtripMs);
     if (document.getElementById('mode-api').checked && document.getElementById('api-key').value) {
@@ -1055,7 +1057,7 @@ async function handleSSOConnect(url, btn) {
         dynamic_registration: startData.dynamic_registration ?? null,
       },
     };
-    await doConnect(url, { type: 'sso', token }, document.getElementById('transport').value);
+    await doConnect(url, { type: 'bearer', token }, document.getElementById('transport').value);
 
   } catch (e) {
     hideSSOOverlay();
