@@ -213,10 +213,13 @@ select option { background: var(--surface2); }
 .history-item {
   font-size: 11px; color: var(--text-muted); padding: 4px 8px;
   border-radius: var(--radius-sm); cursor: pointer;
-  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
   border: 1px solid transparent; transition: all 0.15s;
 }
 .history-item:hover { border-color: var(--border); color: var(--accent); background: var(--surface2); }
+.history-item-name { font-size: 11px; font-weight: 500; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.history-item-url  { font-size: 10px; color: var(--text-dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; margin-top: 1px; }
+.history-item:hover .history-item-name { color: var(--accent); }
+.history-item:hover .history-item-url  { color: var(--text-muted); }
 
 .section-label { font-size: 11px; color: var(--text-dim); text-transform: uppercase; letter-spacing: 0.05em; font-weight: 600; }
 .divider { height: 1px; background: var(--border); }
@@ -882,19 +885,31 @@ const _savedKey = localStorage.getItem('claude-api-key');
 if (_savedKey) document.getElementById('api-key').value = _savedKey;
 
 // ── History ──────────────────────────────────────────────────────
-function loadHistory() { try { return JSON.parse(localStorage.getItem('mcp-history') || '[]'); } catch { return []; } }
-function saveHistory(url) {
-  let h = loadHistory().filter(u => u !== url);
-  h.unshift(url);
+function loadHistory() {
+  try {
+    return (JSON.parse(localStorage.getItem('mcp-history') || '[]')).map(e =>
+      typeof e === 'string' ? { url: e, name: '' } : e
+    );
+  } catch { return []; }
+}
+function saveHistory(url, name) {
+  let h = loadHistory().filter(e => e.url !== url);
+  h.unshift({ url, name: name || '' });
   localStorage.setItem('mcp-history', JSON.stringify(h.slice(0, 8)));
   renderHistory();
 }
 function renderHistory() {
   const list = document.getElementById('history-list');
   list.innerHTML = '';
-  loadHistory().forEach(url => {
+  loadHistory().forEach(({ url, name }) => {
     const el = document.createElement('div');
-    el.className = 'history-item'; el.textContent = url; el.title = url;
+    el.className = 'history-item';
+    el.title = url;
+    if (name) {
+      el.innerHTML = `<div class="history-item-name">${escHtml(name)}</div><div class="history-item-url">${escHtml(url)}</div>`;
+    } else {
+      el.innerHTML = `<div class="history-item-url" style="color:var(--text-muted)">${escHtml(url)}</div>`;
+    }
     el.addEventListener('click', () => { document.getElementById('url').value = url; });
     list.appendChild(el);
   });
@@ -943,7 +958,7 @@ async function doConnect(url, auth, transport) {
     showError(data.error || 'Connection failed', data.error_type);
   } else {
     currentConnection = { url, auth, transport };
-    saveHistory(url);
+    saveHistory(url, (data.server_info || {}).name || '');
     renderResults(data, roundtripMs);
     if (document.getElementById('mode-api').checked && document.getElementById('api-key').value) {
       setTimeout(countWithAPI, 200);
