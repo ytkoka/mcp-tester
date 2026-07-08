@@ -530,10 +530,16 @@ async def _discover_oauth_full(url: str) -> dict:
             "/.well-known/oauth-authorization-server",
             "/.well-known/openid-configuration",
         ]:
+            target = f"{base}{path}"
             try:
-                resp = await client.get(f"{base}{path}")
+                resp = await client.get(target)
+                logger.info("[oauth-discover] Step1/2 GET %s → %s (redirected to: %s)",
+                            target, resp.status_code,
+                            str(resp.url) if str(resp.url) != target else "—")
                 if resp.status_code == 200:
                     d = resp.json()
+                    logger.info("[oauth-discover] Step1/2 body keys: %s", list(d.keys()))
+                    logger.info("[oauth-discover] scopes_supported from Step1/2: %s", d.get("scopes_supported"))
                     return {
                         "found": True,
                         "authorization_endpoint": d.get("authorization_endpoint"),
@@ -542,7 +548,10 @@ async def _discover_oauth_full(url: str) -> dict:
                         "issuer": d.get("issuer"),
                         "scopes_supported": d.get("scopes_supported", []),
                     }
-            except Exception:
+                else:
+                    logger.info("[oauth-discover] Step1/2 skipped (non-200)")
+            except Exception as e:
+                logger.info("[oauth-discover] Step1/2 %s failed: %s", target, e)
                 continue
 
         # 3: MCP spec — hit the resource URL, follow 401/403 chain.
@@ -552,6 +561,7 @@ async def _discover_oauth_full(url: str) -> dict:
             for attempt in ["get", "post"]:
                 if attempt == "get":
                     resp = await client.get(url)
+                    logger.info("[oauth-discover] Step3 GET %s → %s", url, resp.status_code)
                 else:
                     if resp.status_code not in (401, 403):
                         resp = await client.post(
@@ -559,22 +569,33 @@ async def _discover_oauth_full(url: str) -> dict:
                             json={"jsonrpc": "2.0", "method": "initialize", "id": 1},
                             headers={"Content-Type": "application/json"},
                         )
+                        logger.info("[oauth-discover] Step3 POST %s → %s", url, resp.status_code)
                 if resp.status_code in (401, 403):
                     www_auth = resp.headers.get("WWW-Authenticate", "")
+                    logger.info("[oauth-discover] Step3 WWW-Authenticate: %s", www_auth)
                     m = re.search(r'resource_metadata="([^"]+)"', www_auth)
                     if m:
-                        _assert_safe_discovery_url(m.group(1))
-                        meta_resp = await client.get(m.group(1))
+                        resource_meta_url = m.group(1)
+                        logger.info("[oauth-discover] Step3 resource_metadata URL: %s", resource_meta_url)
+                        _assert_safe_discovery_url(resource_meta_url)
+                        meta_resp = await client.get(resource_meta_url)
+                        logger.info("[oauth-discover] Step3 resource metadata → %s, body keys: %s",
+                                    meta_resp.status_code,
+                                    list(meta_resp.json().keys()) if meta_resp.status_code == 200 else "—")
                         if meta_resp.status_code == 200:
                             meta = meta_resp.json()
                             as_urls = meta.get("authorization_servers", [])
+                            logger.info("[oauth-discover] Step3 authorization_servers: %s", as_urls)
                             if as_urls:
+                                as_well_known = f"{as_urls[0]}/.well-known/oauth-authorization-server"
                                 _assert_safe_discovery_url(as_urls[0])
-                                as_resp = await client.get(
-                                    f"{as_urls[0]}/.well-known/oauth-authorization-server"
-                                )
+                                logger.info("[oauth-discover] Step3 fetching AS metadata: %s", as_well_known)
+                                as_resp = await client.get(as_well_known)
+                                logger.info("[oauth-discover] Step3 AS metadata → %s", as_resp.status_code)
                                 if as_resp.status_code == 200:
                                     d = as_resp.json()
+                                    logger.info("[oauth-discover] Step3 AS body keys: %s", list(d.keys()))
+                                    logger.info("[oauth-discover] scopes_supported from Step3: %s", d.get("scopes_supported"))
                                     return {
                                         "found": True,
                                         "authorization_endpoint": d.get("authorization_endpoint"),
@@ -583,9 +604,11 @@ async def _discover_oauth_full(url: str) -> dict:
                                         "issuer": d.get("issuer"),
                                         "scopes_supported": d.get("scopes_supported", []),
                                     }
+                    else:
+                        logger.info("[oauth-discover] Step3 no resource_metadata in WWW-Authenticate")
                     break  # 401/403 received but no usable metadata — stop here
-        except Exception:
-            pass
+        except Exception as e:
+            logger.info("[oauth-discover] Step3 exception: %s", e)
 
     return {"found": False}
 

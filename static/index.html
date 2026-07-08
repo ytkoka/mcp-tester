@@ -1999,6 +1999,8 @@ function parseScopeList(jwt) {
 function renderScopeCheck(jwt, oauth) {
   const granted   = parseScopeList(jwt);
   const supported = (oauth && oauth.scopes_supported) || [];
+  console.log('granted:', granted);
+  console.log('supported:', supported, Array.isArray(supported), supported?.length);
 
   if (!granted.length) return '';
 
