@@ -20,8 +20,10 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from mcp import ClientSession
+from mcp.client.session import DEFAULT_CLIENT_INFO
 from mcp.client.streamable_http import streamablehttp_client
 from mcp.client.sse import sse_client
+from mcp.types import LATEST_PROTOCOL_VERSION
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -283,7 +285,11 @@ async def _connect_streamable(url: str, headers: dict) -> tuple[list, list, list
             _t1 = time.perf_counter()
             proto_msgs: list[dict] = [
                 {"ts_ms": round((_t1 - _t0) * 1000), "direction": "request", "method": "initialize",
-                 "body": {"protocolVersion": "2025-11-25", "capabilities": {}, "clientInfo": {"name": "mcp-tester", "version": "0.1.0"}}},
+                 "body": {
+                     "protocolVersion": LATEST_PROTOCOL_VERSION,
+                     "capabilities": {"_note": "reconstructed — actual capabilities depend on SDK callbacks"},
+                     "clientInfo": _safe_dump(DEFAULT_CLIENT_INFO),
+                 }},
             ]
             result = await session.initialize()
             timing["initialize_ms"] = round((time.perf_counter() - _t1) * 1000)
@@ -317,7 +323,11 @@ async def _connect_sse(url: str, headers: dict) -> tuple[list, list, list, dict,
             _t1 = time.perf_counter()
             proto_msgs: list[dict] = [
                 {"ts_ms": round((_t1 - _t0) * 1000), "direction": "request", "method": "initialize",
-                 "body": {"protocolVersion": "2025-11-25", "capabilities": {}, "clientInfo": {"name": "mcp-tester", "version": "0.1.0"}}},
+                 "body": {
+                     "protocolVersion": LATEST_PROTOCOL_VERSION,
+                     "capabilities": {"_note": "reconstructed — actual capabilities depend on SDK callbacks"},
+                     "clientInfo": _safe_dump(DEFAULT_CLIENT_INFO),
+                 }},
             ]
             result = await session.initialize()
             timing["initialize_ms"] = round((time.perf_counter() - _t1) * 1000)
