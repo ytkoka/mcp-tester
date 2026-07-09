@@ -483,6 +483,24 @@ details summary::-webkit-details-marker { display: none; }
 .timing-ms { width: 48px; text-align: right; font-size: 11px; font-family: "SF Mono","Fira Code",monospace; color: var(--text); flex-shrink: 0; }
 .timing-pct { width: 32px; text-align: right; font-size: 10px; color: var(--text-dim); flex-shrink: 0; }
 
+/* ── Protocol Messages ───────────────────────────────────────── */
+.pm-card { margin-top: 12px; }
+.pm-entry { border-bottom: 1px solid var(--border); }
+.pm-entry:last-child { border-bottom: none; }
+.pm-header { display: flex; align-items: center; gap: 6px; padding: 6px 0; cursor: pointer; user-select: none; }
+.pm-header:hover .pm-method { color: var(--accent); }
+.pm-dir { font-size: 10px; font-family: "SF Mono","Fira Code",monospace; font-weight: 700; flex-shrink: 0; width: 22px; }
+.pm-dir-req  { color: var(--accent); }
+.pm-dir-res  { color: var(--success); }
+.pm-dir-err  { color: var(--error); }
+.pm-method { font-size: 11px; font-family: "SF Mono","Fira Code",monospace; color: var(--text); flex: 1; }
+.pm-ts { font-size: 10px; color: var(--text-dim); flex-shrink: 0; }
+.pm-body { display: none; padding: 4px 0 8px 28px; }
+.pm-body.open { display: block; }
+.pm-json { font-size: 10px; font-family: "SF Mono","Fira Code",monospace; color: var(--text-dim); white-space: pre-wrap; word-break: break-all; background: var(--surface2); border-radius: 4px; padding: 6px 8px; margin: 0; max-height: 300px; overflow-y: auto; }
+.pm-truncated { font-size: 10px; color: var(--text-dim); font-style: italic; margin-top: 3px; }
+.pm-badge { font-size: 10px; font-weight: 600; color: var(--text-muted); background: var(--surface2); border-radius: 8px; padding: 1px 6px; }
+
 /* ── Auth Inspector ───────────────────────────────────────────── */
 .ai-method-badge { display: inline-block; font-size: 10px; font-weight: 600; padding: 2px 7px; border-radius: 10px; background: var(--accent-dim); color: var(--accent); margin-bottom: 10px; }
 .ai-section { margin-top: 10px; padding-top: 8px; border-top: 1px solid var(--border); }
@@ -693,6 +711,10 @@ let currentConnection = null; // {url, auth, transport}
 let activeTab = 'tools';
 let currentInputTokens = 0;  // per_request_estimate (used for cost calc)
 let currentToolTokens  = 0;  // tools_total only
+let protocolHistory = [];     // [{ts_ms, direction, method, body}, ...]
+let connectionStartTime = null; // Date.now() when connection completed
+const MAX_PROTO_MSGS   = 200;
+const MAX_PAYLOAD_CHARS = 5000;
 
 // ── Cost model pricing ($/1M tokens, editable at runtime) ────────
 const MODELS = [
@@ -980,6 +1002,9 @@ async function doConnect(url, auth, transport) {
     showError(data.error || 'Connection failed', data.error_type);
   } else {
     currentConnection = { url, auth, transport };
+    connectionStartTime = Date.now() - roundtripMs;
+    protocolHistory = [];
+    for (const msg of (data.protocol_messages || [])) protocolHistory.push(msg);
     saveHistory(url, (data.server_info || {}).name || '');
     // SSO sets lastAuthDebug (with OAuth metadata) before calling doConnect.
     // Detect SSO by checking lastAuthDebug.method to preserve that richer info.
@@ -1224,6 +1249,60 @@ function showError(msg, type) {
     </div>`;
 }
 
+// ── Protocol Messages ─────────────────────────────────────────────
+function addProtoMsg(direction, method, body) {
+  const ts_ms = connectionStartTime != null ? Date.now() - connectionStartTime : 0;
+  protocolHistory.push({ ts_ms, direction, method, body });
+  if (protocolHistory.length > MAX_PROTO_MSGS) protocolHistory.shift();
+  refreshProtoMessages();
+}
+
+function refreshProtoMessages() {
+  const el = document.getElementById('proto-messages-list');
+  if (!el) return;
+  el.innerHTML = renderProtoList();
+  const badge = document.getElementById('proto-msg-badge');
+  if (badge) badge.textContent = protocolHistory.length;
+}
+
+function renderProtoList() {
+  if (!protocolHistory.length) return '<div style="font-size:11px;color:var(--text-dim);padding:6px 0">No messages yet.</div>';
+  return protocolHistory.map((msg, i) => {
+    const dirClass = msg.direction === 'request' ? 'pm-dir-req' : msg.direction === 'error' ? 'pm-dir-err' : 'pm-dir-res';
+    const dirLabel = msg.direction === 'request' ? '→' : msg.direction === 'error' ? '✕' : '←';
+    const tsLabel  = msg.ts_ms >= 1000 ? `+${(msg.ts_ms/1000).toFixed(2)}s` : `+${msg.ts_ms}ms`;
+    const raw = JSON.stringify(msg.body, null, 2) || '';
+    const truncated = raw.length > MAX_PAYLOAD_CHARS;
+    const display = truncated ? raw.slice(0, MAX_PAYLOAD_CHARS) : raw;
+    return `<div class="pm-entry">
+      <div class="pm-header" onclick="this.nextElementSibling.classList.toggle('open')">
+        <span class="pm-dir ${dirClass}">${dirLabel}</span>
+        <span class="pm-method">${escHtml(msg.method)}</span>
+        <span class="pm-ts">${escHtml(tsLabel)}</span>
+      </div>
+      <div class="pm-body">
+        <pre class="pm-json">${escHtml(display)}</pre>
+        ${truncated ? `<div class="pm-truncated">… truncated (${raw.length - MAX_PAYLOAD_CHARS} more chars)</div>` : ''}
+      </div>
+    </div>`;
+  }).join('');
+}
+
+function renderProtoMessagesCard() {
+  return `<div class="card pm-card" id="proto-messages-card">
+    <div style="display:flex;align-items:center;gap:8px">
+      <button class="timing-toggle" style="flex:1;text-align:left"
+        onclick="const p=document.getElementById('proto-messages-panel');const o=p.classList.toggle('open');this.textContent=(o?'▼':'▶')+' Protocol Messages'">
+        ▶ Protocol Messages
+      </button>
+      <span class="pm-badge" id="proto-msg-badge">${protocolHistory.length}</span>
+    </div>
+    <div id="proto-messages-panel" class="timing-panel">
+      <div id="proto-messages-list" style="margin-top:6px">${renderProtoList()}</div>
+    </div>
+  </div>`;
+}
+
 function renderResults(data, roundtripMs) {
   currentTools     = data.tools     || [];
   currentResources = data.resources || [];
@@ -1336,7 +1415,9 @@ function renderResults(data, roundtripMs) {
         </div>
         <div id="prompts-list"></div>
       </div>
-    </div>`;
+    </div>
+
+    ${renderProtoMessagesCard()}`;
 
   renderToolList(currentTools);
   renderResourceList(currentResources);
@@ -1428,6 +1509,7 @@ async function readResource(idx) {
   statusEl.textContent = '';
 
   const t0 = performance.now();
+  addProtoMsg('request', 'resources/read', { uri: resource.uri });
   try {
     const resp = await fetch('/api/resources/read', {
       method: 'POST',
@@ -1441,7 +1523,11 @@ async function readResource(idx) {
     });
     const data = await resp.json();
     const elapsed = Math.round(performance.now() - t0);
-    if (!resp.ok || !data.success) throw new Error(data.error || 'Read failed');
+    if (!resp.ok || !data.success) {
+      addProtoMsg('error', 'resources/read', { error: data.error || 'Read failed' });
+      throw new Error(data.error || 'Read failed');
+    }
+    addProtoMsg('response', 'resources/read', { contents: data.contents });
 
     renderResourceResult(idx, data, elapsed);
     statusEl.innerHTML = `<span style="color:var(--success)">✓ server: ${fmtMs(data.exec_time_ms)} · roundtrip: ${fmtMs(elapsed)}</span>`;
@@ -1601,6 +1687,7 @@ async function getPrompt(idx) {
   statusEl.textContent = '';
 
   const t0 = performance.now();
+  addProtoMsg('request', 'prompts/get', { name: prompt.name, arguments: promptArgs });
   try {
     const resp = await fetch('/api/prompts/get', {
       method: 'POST',
@@ -1615,7 +1702,11 @@ async function getPrompt(idx) {
     });
     const data = await resp.json();
     const elapsed = Math.round(performance.now() - t0);
-    if (!resp.ok || !data.success) throw new Error(data.error || 'Get prompt failed');
+    if (!resp.ok || !data.success) {
+      addProtoMsg('error', 'prompts/get', { error: data.error || 'Get prompt failed' });
+      throw new Error(data.error || 'Get prompt failed');
+    }
+    addProtoMsg('response', 'prompts/get', { messages: data.messages });
 
     renderPromptResult(idx, data, elapsed);
     statusEl.innerHTML = `<span style="color:var(--success)">✓ server: ${fmtMs(data.exec_time_ms)} · roundtrip: ${fmtMs(elapsed)}</span>`;
@@ -1845,6 +1936,7 @@ async function runTool(idx) {
   statusEl.textContent = '';
 
   const t0 = performance.now();
+  addProtoMsg('request', 'tools/call', { name: tool.name, arguments: toolArgs });
   try {
     const resp = await fetch('/api/execute', {
       method: 'POST',
@@ -1860,7 +1952,11 @@ async function runTool(idx) {
     const data = await resp.json();
     const elapsed = Math.round(performance.now() - t0);
 
-    if (!resp.ok || !data.success) throw new Error(data.error || 'Execution failed');
+    if (!resp.ok || !data.success) {
+      addProtoMsg('error', 'tools/call', { error: data.error || 'Execution failed' });
+      throw new Error(data.error || 'Execution failed');
+    }
+    addProtoMsg('response', 'tools/call', { isError: data.is_error, content: data.content });
 
     renderExecResult(idx, data, elapsed);
     const col = data.is_error ? 'var(--error)' : 'var(--success)';

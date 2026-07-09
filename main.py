@@ -146,6 +146,23 @@ async def build_headers(auth: AuthConfig) -> tuple[dict[str, str], dict | None]:
     return headers, token_info
 
 
+def _safe_dump(obj: Any) -> Any:
+    """Recursively convert Pydantic models / MCP SDK objects to JSON-serializable types."""
+    if hasattr(obj, "model_dump"):
+        try:
+            return obj.model_dump(exclude_none=True)
+        except Exception:
+            return str(obj)
+    elif isinstance(obj, dict):
+        return {k: _safe_dump(v) for k, v in obj.items()}
+    elif isinstance(obj, (list, tuple)):
+        return [_safe_dump(x) for x in obj]
+    elif isinstance(obj, (str, int, float, bool)) or obj is None:
+        return obj
+    else:
+        return str(obj)
+
+
 def tool_to_dict(tool: Any) -> dict[str, Any]:
     schema = tool.inputSchema
     if hasattr(schema, "model_dump"):
@@ -186,7 +203,7 @@ def prompt_to_dict(prompt: Any) -> dict[str, Any]:
     }
 
 
-async def _list_primitives(session: ClientSession, caps: Any) -> tuple[list, list, list, dict]:
+async def _list_primitives(session: ClientSession, caps: Any, t0_perf: float) -> tuple[list, list, list, dict, list]:
     """List only the primitives the server advertised in its initialize capabilities.
 
     Gating on caps prevents calling list_resources/list_prompts on servers that
@@ -195,38 +212,66 @@ async def _list_primitives(session: ClientSession, caps: Any) -> tuple[list, lis
 
     tools: called when caps is absent (old server) OR caps.tools is present.
     resources/prompts: called only when explicitly advertised.
+
+    t0_perf: perf_counter timestamp of the connection start, used to compute
+    ts_ms (elapsed milliseconds) for each protocol message entry.
     """
     tools, resources, prompts = [], [], []
     timing: dict[str, int] = {"list_tools_ms": 0, "list_resources_ms": 0, "list_prompts_ms": 0}
+    proto_msgs: list[dict] = []
 
     if caps is None or getattr(caps, "tools", None) is not None:
         _ts = time.perf_counter()
+        proto_msgs.append({"ts_ms": round((_ts - t0_perf) * 1000), "direction": "request", "method": "tools/list", "body": {}})
         try:
-            tools = [tool_to_dict(t) for t in (await session.list_tools()).tools]
-        except Exception:
-            pass
+            result = await session.list_tools()
+            tools = [tool_to_dict(t) for t in result.tools]
+            proto_msgs.append({
+                "ts_ms": round((time.perf_counter() - t0_perf) * 1000),
+                "direction": "response",
+                "method": "tools/list",
+                "body": {"tools": [_safe_dump(t) for t in result.tools]},
+            })
+        except Exception as e:
+            proto_msgs.append({"ts_ms": round((time.perf_counter() - t0_perf) * 1000), "direction": "error", "method": "tools/list", "body": {"error": str(e)}})
         timing["list_tools_ms"] = round((time.perf_counter() - _ts) * 1000)
 
     if caps is not None and getattr(caps, "resources", None) is not None:
         _ts = time.perf_counter()
+        proto_msgs.append({"ts_ms": round((_ts - t0_perf) * 1000), "direction": "request", "method": "resources/list", "body": {}})
         try:
-            resources = [resource_to_dict(r) for r in (await session.list_resources()).resources]
-        except Exception:
-            pass
+            result = await session.list_resources()
+            resources = [resource_to_dict(r) for r in result.resources]
+            proto_msgs.append({
+                "ts_ms": round((time.perf_counter() - t0_perf) * 1000),
+                "direction": "response",
+                "method": "resources/list",
+                "body": {"resources": [_safe_dump(r) for r in result.resources]},
+            })
+        except Exception as e:
+            proto_msgs.append({"ts_ms": round((time.perf_counter() - t0_perf) * 1000), "direction": "error", "method": "resources/list", "body": {"error": str(e)}})
         timing["list_resources_ms"] = round((time.perf_counter() - _ts) * 1000)
 
     if caps is not None and getattr(caps, "prompts", None) is not None:
         _ts = time.perf_counter()
+        proto_msgs.append({"ts_ms": round((_ts - t0_perf) * 1000), "direction": "request", "method": "prompts/list", "body": {}})
         try:
-            prompts = [prompt_to_dict(p) for p in (await session.list_prompts()).prompts]
-        except Exception:
-            pass
+            result = await session.list_prompts()
+            prompts = [prompt_to_dict(p) for p in result.prompts]
+            proto_msgs.append({
+                "ts_ms": round((time.perf_counter() - t0_perf) * 1000),
+                "direction": "response",
+                "method": "prompts/list",
+                "body": {"prompts": [_safe_dump(p) for p in result.prompts]},
+            })
+        except Exception as e:
+            proto_msgs.append({"ts_ms": round((time.perf_counter() - t0_perf) * 1000), "direction": "error", "method": "prompts/list", "body": {"error": str(e)}})
         timing["list_prompts_ms"] = round((time.perf_counter() - _ts) * 1000)
 
-    return tools, resources, prompts, timing
+    return tools, resources, prompts, timing, proto_msgs
 
 
-async def _connect_streamable(url: str, headers: dict) -> tuple[list, list, list, dict, dict]:
+async def _connect_streamable(url: str, headers: dict) -> tuple[list, list, list, dict, dict, list]:
     tools, resources, prompts, info = [], [], [], {}
     timing: dict[str, int] = {}
 
@@ -236,20 +281,31 @@ async def _connect_streamable(url: str, headers: dict) -> tuple[list, list, list
 
         async with ClientSession(read, write) as session:
             _t1 = time.perf_counter()
+            proto_msgs: list[dict] = [
+                {"ts_ms": round((_t1 - _t0) * 1000), "direction": "request", "method": "initialize",
+                 "body": {"protocolVersion": "2025-11-25", "capabilities": {}, "clientInfo": {"name": "mcp-tester", "version": "0.1.0"}}},
+            ]
             result = await session.initialize()
             timing["initialize_ms"] = round((time.perf_counter() - _t1) * 1000)
+            proto_msgs.append({
+                "ts_ms": round((time.perf_counter() - _t0) * 1000),
+                "direction": "response",
+                "method": "initialize",
+                "body": _safe_dump(result),
+            })
 
             if result.serverInfo:
                 info = {"name": result.serverInfo.name, "version": result.serverInfo.version}
             info["protocol_version"] = str(result.protocolVersion) if result.protocolVersion else "unknown"
 
-            tools, resources, prompts, prim_timing = await _list_primitives(session, result.capabilities)
+            tools, resources, prompts, prim_timing, prim_msgs = await _list_primitives(session, result.capabilities, _t0)
             timing.update(prim_timing)
+            proto_msgs.extend(prim_msgs)
 
-    return tools, resources, prompts, info, timing
+    return tools, resources, prompts, info, timing, proto_msgs
 
 
-async def _connect_sse(url: str, headers: dict) -> tuple[list, list, list, dict, dict]:
+async def _connect_sse(url: str, headers: dict) -> tuple[list, list, list, dict, dict, list]:
     tools, resources, prompts, info = [], [], [], {}
     timing: dict[str, int] = {}
 
@@ -259,17 +315,28 @@ async def _connect_sse(url: str, headers: dict) -> tuple[list, list, list, dict,
 
         async with ClientSession(read, write) as session:
             _t1 = time.perf_counter()
+            proto_msgs: list[dict] = [
+                {"ts_ms": round((_t1 - _t0) * 1000), "direction": "request", "method": "initialize",
+                 "body": {"protocolVersion": "2025-11-25", "capabilities": {}, "clientInfo": {"name": "mcp-tester", "version": "0.1.0"}}},
+            ]
             result = await session.initialize()
             timing["initialize_ms"] = round((time.perf_counter() - _t1) * 1000)
+            proto_msgs.append({
+                "ts_ms": round((time.perf_counter() - _t0) * 1000),
+                "direction": "response",
+                "method": "initialize",
+                "body": _safe_dump(result),
+            })
 
             if result.serverInfo:
                 info = {"name": result.serverInfo.name, "version": result.serverInfo.version}
             info["protocol_version"] = str(result.protocolVersion) if result.protocolVersion else "unknown"
 
-            tools, resources, prompts, prim_timing = await _list_primitives(session, result.capabilities)
+            tools, resources, prompts, prim_timing, prim_msgs = await _list_primitives(session, result.capabilities, _t0)
             timing.update(prim_timing)
+            proto_msgs.extend(prim_msgs)
 
-    return tools, resources, prompts, info, timing
+    return tools, resources, prompts, info, timing, proto_msgs
 
 
 def _serialize_content(result: Any) -> tuple[list[dict], bool]:
@@ -444,28 +511,28 @@ async def call_get_prompt_on_server(url: str, headers: dict, transport: str, pro
         raise RuntimeError(f"Both transports failed.\n• Streamable HTTP: {err_s}\n• SSE: {e}")
 
 
-async def connect_and_list_primitives(url: str, headers: dict, transport: str) -> tuple[list, list, list, dict, str, dict]:
+async def connect_and_list_primitives(url: str, headers: dict, transport: str) -> tuple[list, list, list, dict, str, dict, list]:
     timeout = 30.0
 
     if transport == "streamable_http":
-        tools, resources, prompts, info, timing = await asyncio.wait_for(_connect_streamable(url, headers), timeout)
-        return tools, resources, prompts, info, "streamable_http", timing
+        tools, resources, prompts, info, timing, proto_msgs = await asyncio.wait_for(_connect_streamable(url, headers), timeout)
+        return tools, resources, prompts, info, "streamable_http", timing, proto_msgs
 
     if transport == "sse":
-        tools, resources, prompts, info, timing = await asyncio.wait_for(_connect_sse(url, headers), timeout)
-        return tools, resources, prompts, info, "sse", timing
+        tools, resources, prompts, info, timing, proto_msgs = await asyncio.wait_for(_connect_sse(url, headers), timeout)
+        return tools, resources, prompts, info, "sse", timing, proto_msgs
 
     # auto: try streamable first, fall back to SSE
     err_streamable = ""
     try:
-        tools, resources, prompts, info, timing = await asyncio.wait_for(_connect_streamable(url, headers), timeout)
-        return tools, resources, prompts, info, "streamable_http", timing
+        tools, resources, prompts, info, timing, proto_msgs = await asyncio.wait_for(_connect_streamable(url, headers), timeout)
+        return tools, resources, prompts, info, "streamable_http", timing, proto_msgs
     except Exception as e:
         err_streamable = str(e)
 
     try:
-        tools, resources, prompts, info, timing = await asyncio.wait_for(_connect_sse(url, headers), timeout)
-        return tools, resources, prompts, info, "sse", timing
+        tools, resources, prompts, info, timing, proto_msgs = await asyncio.wait_for(_connect_sse(url, headers), timeout)
+        return tools, resources, prompts, info, "sse", timing, proto_msgs
     except Exception as e:
         raise RuntimeError(
             f"Both transports failed.\n"
@@ -922,7 +989,7 @@ async def connect_to_mcp(req: ConnectRequest):
         headers, token_info = await build_headers(req.auth)
 
         t0 = time.perf_counter()
-        tools_raw, resources_raw, prompts_raw, server_info, transport_used, fetch_timing = await connect_and_list_primitives(
+        tools_raw, resources_raw, prompts_raw, server_info, transport_used, fetch_timing, proto_msgs = await connect_and_list_primitives(
             req.url, headers, req.transport
         )
         fetch_ms = round((time.perf_counter() - t0) * 1000)
@@ -956,6 +1023,7 @@ async def connect_to_mcp(req: ConnectRequest):
             "resources": resources_raw,
             "prompt_count": len(prompts_raw),
             "prompts": prompts_raw,
+            "protocol_messages": proto_msgs,
             "token_summary": {
                 "tools_total": total_tokens,
                 "overhead": 50,
