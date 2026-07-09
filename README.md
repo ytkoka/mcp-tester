@@ -63,6 +63,20 @@ pip install \
   "httpx>=0.25.0"
 ```
 
+### Optional: OpenAI token counting (tiktoken)
+
+To enable the **OpenAI GPT-4o / GPT-4** token counting providers, install `tiktoken`:
+
+```bash
+# uv
+uv pip install tiktoken
+
+# pip (if using the pip-based setup)
+pip install tiktoken
+```
+
+Without it, the OpenAI providers return an error message and the other providers (Generic estimate, Claude API) continue to work normally.
+
 ---
 
 ## Quick Start

@@ -25,6 +25,13 @@ from mcp.client.streamable_http import streamablehttp_client
 from mcp.client.sse import sse_client
 from mcp.types import LATEST_PROTOCOL_VERSION
 
+try:
+    import tiktoken as _tiktoken
+    _TIKTOKEN_AVAILABLE = True
+except ImportError:
+    _tiktoken = None  # type: ignore[assignment]
+    _TIKTOKEN_AVAILABLE = False
+
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
@@ -117,6 +124,31 @@ def estimate_tool_tokens(tool: dict) -> int:
         "input_schema": tool.get("inputSchema", {}),
     }
     return estimate_tokens(json.dumps(claude_format, ensure_ascii=False)) + 20
+
+
+def _count_tokens_tiktoken(tools: list[dict], encoding_name: str) -> dict:
+    if not _TIKTOKEN_AVAILABLE:
+        return {"success": False, "error": "tiktoken is not installed. Run: pip install tiktoken"}
+    enc = _tiktoken.get_encoding(encoding_name)
+    per_tool = []
+    for t in tools:
+        # Serialize in OpenAI function-calling format so the text is representative
+        text = json.dumps({
+            "type": "function",
+            "function": {
+                "name": t.get("name", ""),
+                "description": t.get("description", ""),
+                "parameters": t.get("inputSchema", {}),
+            },
+        }, ensure_ascii=False)
+        per_tool.append(len(enc.encode(text)))
+    return {
+        "success": True,
+        "total_tokens": sum(per_tool),
+        "per_tool_tokens": per_tool,
+        "provider": f"tiktoken:{encoding_name}",
+        "encoding": encoding_name,
+    }
 
 
 async def fetch_oauth_token(auth: AuthConfig) -> tuple[str, int | None]:
@@ -916,13 +948,31 @@ async def oauth_discover(req: DiscoverRequest):
 
 class CountTokensRequest(BaseModel):
     tools: list[dict]
-    api_key: str
+    api_key: str = ""
     model: str = "claude-haiku-4-5-20251001"
+    provider: str = "claude"
 
 
 @app.post("/api/count-tokens")
 async def count_tokens_api(req: CountTokensRequest):
-    """Call Claude API count_tokens with and without tools; return accurate per-tool breakdown."""
+    """Count tokens with the requested provider (claude / openai-o200k / openai-cl100k / generic)."""
+    if req.provider in ("openai-o200k", "openai-cl100k"):
+        encoding = "o200k_base" if req.provider == "openai-o200k" else "cl100k_base"
+        result = _count_tokens_tiktoken(req.tools, encoding)
+        if not result["success"]:
+            return JSONResponse(status_code=400, content=result)
+        return result
+
+    if req.provider == "generic":
+        per_tool = [estimate_tool_tokens(t) for t in req.tools]
+        return {
+            "success": True,
+            "total_tokens": sum(per_tool),
+            "per_tool_tokens": per_tool,
+            "provider": "generic",
+        }
+
+    # provider == "claude" (default)
     claude_tools = [
         {
             "name": t.get("name", ""),

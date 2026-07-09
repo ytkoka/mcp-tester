@@ -236,11 +236,9 @@ select option { background: var(--surface2); }
 .tag.required { border-color: rgba(210,153,34,0.4); color: var(--warning); background: rgba(210,153,34,0.1); }
 
 /* Token counting section */
-.count-mode-row { display: flex; gap: 16px; margin-bottom: 10px; }
-.radio-label { display: flex; align-items: center; gap: 5px; cursor: pointer; font-size: 12px; color: var(--text-muted); }
-.radio-label input { accent-color: var(--accent); cursor: pointer; }
-.radio-label:has(input:checked) { color: var(--text); }
-#api-settings { display: flex; flex-direction: column; gap: 10px; }
+#token-counting-section { display: flex; flex-direction: column; gap: 10px; }
+#api-settings { display: none; flex-direction: column; gap: 10px; }
+.provider-caveat { font-size: 10px; color: var(--text-dim); line-height: 1.5; display: none; }
 
 /* SSO overlay */
 #sso-overlay {
@@ -561,19 +559,18 @@ details summary::-webkit-details-marker { display: none; }
       <div class="divider"></div>
 
       <!-- Token Counting -->
-      <div>
-        <div class="section-label" style="margin-bottom:10px">Token Counting</div>
-        <div class="count-mode-row">
-          <label class="radio-label">
-            <input type="radio" name="count-mode" value="estimate" id="mode-estimate" checked>
-            <span>Estimate</span>
-          </label>
-          <label class="radio-label">
-            <input type="radio" name="count-mode" value="api" id="mode-api">
-            <span>Claude API (accurate)</span>
-          </label>
+      <div id="token-counting-section">
+        <div class="section-label">Token Counting</div>
+        <div>
+          <label>Provider</label>
+          <select id="token-provider" onchange="onProviderChange()">
+            <option value="generic" selected>Generic estimate (~4 chars/token)</option>
+            <option value="claude">Claude (Anthropic API — accurate)</option>
+            <option value="openai-o200k">OpenAI GPT-4o / o-series (tiktoken)</option>
+            <option value="openai-cl100k">OpenAI GPT-4 / GPT-3.5 (tiktoken)</option>
+          </select>
         </div>
-        <div id="api-settings" style="display:none">
+        <div id="api-settings">
           <div>
             <label>API Key</label>
             <input id="api-key" type="password" placeholder="sk-ant-api03-..." autocomplete="off" />
@@ -586,6 +583,9 @@ details summary::-webkit-details-marker { display: none; }
               <option value="claude-opus-4-8">Claude Opus 4.8</option>
             </select>
           </div>
+        </div>
+        <div id="openai-caveat" class="provider-caveat">
+          ⚠ tiktoken counts tokens in the tool definition JSON text. The overhead from OpenAI's internal function-calling format expansion is not included, so actual consumption may be higher. Claude's count_tokens API (which accepts tools directly) is more accurate.
         </div>
       </div>
 
@@ -711,6 +711,8 @@ let currentConnection = null; // {url, auth, transport}
 let activeTab = 'tools';
 let currentInputTokens = 0;  // per_request_estimate (used for cost calc)
 let currentToolTokens  = 0;  // tools_total only
+let estimatedInputTokens = 0; // original generic estimate — never overwritten by accurate counts
+let estimatedToolTokens  = 0;
 let protocolHistory = [];     // [{ts_ms, direction, method, body}, ...]
 let connectionStartTime = null; // Date.now() when connection completed
 const MAX_PROTO_MSGS   = 200;
@@ -910,17 +912,48 @@ function renderSSOFields(c) {
 
 renderAuthFields('none');
 
-// ── Token counting mode ──────────────────────────────────────────
-document.querySelectorAll('input[name="count-mode"]').forEach(r => {
-  r.addEventListener('change', () => {
-    const isApi = document.getElementById('mode-api').checked;
-    document.getElementById('api-settings').style.display = isApi ? 'flex' : 'none';
-    if (isApi) {
-      const saved = localStorage.getItem('claude-api-key');
-      if (saved && !document.getElementById('api-key').value) document.getElementById('api-key').value = saved;
-    }
-  });
-});
+// ── Token counting provider ──────────────────────────────────────
+function onProviderChange() {
+  const p = document.getElementById('token-provider').value;
+  document.getElementById('api-settings').style.display  = p === 'claude' ? 'flex' : 'none';
+  document.getElementById('openai-caveat').style.display = p.startsWith('openai') ? 'block' : 'none';
+  if (p === 'claude') {
+    const saved = localStorage.getItem('claude-api-key');
+    if (saved && !document.getElementById('api-key').value) document.getElementById('api-key').value = saved;
+  }
+  _syncCountBtn();
+  if (!currentTools.length) return; // no results yet
+  if (p === 'generic') { resetToEstimate(); return; }
+  if (p === 'claude' && !document.getElementById('api-key').value) return; // need key first
+  countWithAPI();
+}
+
+function resetToEstimate() {
+  currentTools.forEach(t => delete t.accurate_tokens);
+  tokenDisplayMode = 'estimate';
+  maxTokens = currentTools.reduce((m, t) => Math.max(m, t.estimated_tokens), 1);
+  const toolTokEl = document.getElementById('stat-tool-tokens');
+  const perReqEl  = document.getElementById('stat-per-request');
+  const modeBadge = document.getElementById('token-mode-badge');
+  if (toolTokEl) { toolTokEl.textContent = fmtNum(estimatedToolTokens);  toolTokEl.className = 'stat-value ' + tokenClass(estimatedToolTokens); }
+  if (perReqEl)  { perReqEl.textContent  = fmtNum(estimatedInputTokens); perReqEl.className  = 'stat-value ' + tokenClass(estimatedInputTokens); }
+  if (modeBadge) { modeBadge.textContent = 'Estimated (~4 chars/token)'; modeBadge.className = 'tok-mode-badge tok-mode-est'; }
+  const status = document.getElementById('count-api-status');
+  if (status) status.textContent = '';
+  const q = document.getElementById('tool-search')?.value || '';
+  filterTools(q);
+  currentInputTokens = estimatedInputTokens;
+  currentToolTokens  = estimatedToolTokens;
+  updateCostCard();
+}
+function _syncCountBtn() {
+  const p   = document.getElementById('token-provider')?.value || 'generic';
+  const btn = document.getElementById('count-api-btn');
+  if (!btn) return;
+  if (p === 'generic') { btn.style.display = 'none'; return; }
+  btn.style.display = '';
+  btn.textContent   = p === 'claude' ? 'Count with Claude API' : 'Count with tiktoken';
+}
 document.getElementById('api-key').addEventListener('input', e => {
   if (e.target.value) localStorage.setItem('claude-api-key', e.target.value);
 });
@@ -1026,7 +1059,7 @@ async function doConnect(url, auth, transport) {
       showAuthInspector({ method: auth.type, headers, jwt, oauth, cc_expires_in: ccExpiresIn });
     }
     renderResults(data, roundtripMs);
-    if (document.getElementById('mode-api').checked && document.getElementById('api-key').value) {
+    if (document.getElementById('token-provider').value === 'claude' && document.getElementById('api-key').value) {
       setTimeout(countWithAPI, 200);
     }
   }
@@ -1170,17 +1203,19 @@ function showSSOOverlay(authUrl, popup) {
 }
 function hideSSOOverlay() { document.getElementById('sso-overlay').classList.remove('show'); }
 
-// ── Token counting (Claude API) ───────────────────────────────────
+// ── Token counting ────────────────────────────────────────────────
 async function countWithAPI() {
-  const apiKey = document.getElementById('api-key').value.trim();
-  if (!apiKey) {
-    document.getElementById('mode-api').checked = true;
-    document.getElementById('api-settings').style.display = 'flex';
-    document.getElementById('api-key').focus();
-    return;
+  const provider = document.getElementById('token-provider').value;
+
+  if (provider === 'claude') {
+    const apiKey = document.getElementById('api-key').value.trim();
+    if (!apiKey) {
+      document.getElementById('api-settings').style.display = 'flex';
+      document.getElementById('api-key').focus();
+      return;
+    }
   }
 
-  const model  = document.getElementById('api-model').value;
   const btn    = document.getElementById('count-api-btn');
   const status = document.getElementById('count-api-status');
 
@@ -1188,45 +1223,62 @@ async function countWithAPI() {
   btn.innerHTML = '<span class="spinner"></span> Counting...';
   status.textContent = '';
 
+  const body = { tools: currentTools, provider };
+  if (provider === 'claude') {
+    body.api_key = document.getElementById('api-key').value.trim();
+    body.model   = document.getElementById('api-model').value;
+  }
+
   const t0 = performance.now();
   try {
     const resp = await fetch('/api/count-tokens', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ tools: currentTools, api_key: apiKey, model }),
+      body: JSON.stringify(body),
     });
     const data = await resp.json();
     const elapsed = Math.round(performance.now() - t0);
     if (!resp.ok || !data.success) throw new Error(data.error || 'Count failed');
 
-    applyAccurateTokens(data);
-    status.innerHTML = `<span style="color:var(--success)">✓ ${escHtml(data.model)} · ${fmtMs(elapsed)}</span>`;
+    applyAccurateTokens(data, provider);
+    const label = provider === 'claude'
+      ? `${escHtml(data.model)} · ${fmtMs(elapsed)}`
+      : `${escHtml(data.encoding)} · ${fmtMs(elapsed)}`;
+    status.innerHTML = `<span style="color:var(--success)">✓ ${label}</span>`;
 
   } catch (e) {
     status.innerHTML = `<span style="color:var(--error)">${escHtml(e.message)}</span>`;
   } finally {
     btn.disabled = false;
-    btn.textContent = 'Count with Claude API';
+    _syncCountBtn();
   }
 }
 
-function applyAccurateTokens(data) {
+function applyAccurateTokens(data, provider) {
   // Store accurate counts in currentTools
-  data.per_tool_tokens.forEach((tok, i) => {
+  (data.per_tool_tokens || []).forEach((tok, i) => {
     if (currentTools[i]) currentTools[i].accurate_tokens = tok;
   });
   tokenDisplayMode = 'api';
-  maxTokens = Math.max(...(data.per_tool_tokens.length ? data.per_tool_tokens : [1]));
+  const perTool = data.per_tool_tokens || [];
+  maxTokens = Math.max(...(perTool.length ? perTool : [1]));
+
+  // Claude response uses tool_tokens / total_input_tokens; tiktoken uses total_tokens
+  const isClaude  = provider === 'claude';
+  const toolTok   = isClaude ? data.tool_tokens        : data.total_tokens;
+  const totalTok  = isClaude ? data.total_input_tokens : data.total_tokens;
 
   // Update summary stats
-  const toolTok = document.getElementById('stat-tool-tokens');
-  const perReq  = document.getElementById('stat-per-request');
+  const toolTokEl = document.getElementById('stat-tool-tokens');
+  const perReqEl  = document.getElementById('stat-per-request');
   const modeBadge = document.getElementById('token-mode-badge');
-  if (toolTok) { toolTok.textContent = fmtNum(data.tool_tokens);          toolTok.className = 'stat-value success'; }
-  if (perReq)  { perReq.textContent  = fmtNum(data.total_input_tokens);   perReq.className  = 'stat-value ' + tokenClass(data.total_input_tokens); }
+  if (toolTokEl) { toolTokEl.textContent = fmtNum(toolTok);  toolTokEl.className = 'stat-value success'; }
+  if (perReqEl)  { perReqEl.textContent  = fmtNum(totalTok); perReqEl.className  = 'stat-value ' + tokenClass(totalTok); }
   if (modeBadge) {
-    modeBadge.textContent = `Accurate · ${data.model}`;
-    modeBadge.className   = 'tok-mode-badge tok-mode-api';
+    modeBadge.textContent = isClaude
+      ? `Accurate · ${data.model}`
+      : `tiktoken · ${data.encoding} (approximate)`;
+    modeBadge.className = 'tok-mode-badge tok-mode-api';
   }
 
   // Re-render tool list with accurate tokens
@@ -1234,8 +1286,8 @@ function applyAccurateTokens(data) {
   filterTools(q);
 
   // Refresh cost card with accurate token counts
-  currentInputTokens = data.total_input_tokens || currentInputTokens;
-  currentToolTokens  = data.tool_tokens        || currentToolTokens;
+  currentInputTokens = totalTok || currentInputTokens;
+  currentToolTokens  = toolTok  || currentToolTokens;
   updateCostCard();
 }
 
@@ -1311,8 +1363,10 @@ function renderResults(data, roundtripMs) {
   currentTools.forEach(t => delete t.accurate_tokens);
   maxTokens = currentTools.reduce((m, t) => Math.max(m, t.estimated_tokens), 1);
   activeTab = 'tools';
-  currentInputTokens = (data.token_summary || {}).per_request_estimate || 0;
-  currentToolTokens  = (data.token_summary || {}).tools_total          || 0;
+  currentInputTokens   = (data.token_summary || {}).per_request_estimate || 0;
+  currentToolTokens    = (data.token_summary || {}).tools_total          || 0;
+  estimatedInputTokens = currentInputTokens;
+  estimatedToolTokens  = currentToolTokens;
 
   const si = data.server_info || {};
   const ts = data.token_summary;
@@ -1423,6 +1477,7 @@ function renderResults(data, roundtripMs) {
   renderResourceList(currentResources);
   renderPromptList(currentPrompts);
   updateCostCard();
+  _syncCountBtn();
 }
 
 function switchTab(tab) {
