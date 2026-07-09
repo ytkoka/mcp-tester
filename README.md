@@ -21,6 +21,7 @@ Connect to any MCP server, browse its **Tools, Resources, and Prompts**, measure
 | **Multiple auth methods** | None · Bearer Token · OAuth2 Client Credentials · SSO (Authorization Code + PKCE) · Custom Header |
 | **SSO auto-discovery** | Discovers OAuth endpoints from `/.well-known/oauth-authorization-server` and MCP `WWW-Authenticate` headers |
 | **Dynamic Client Registration** | Registers an OAuth client automatically (RFC 7591) — no Client ID required |
+| **Protocol Messages** | Collapsible history of all MCP JSON-RPC calls made during the session — `initialize`, `tools/list`, `resources/list`, `prompts/list`, `tools/call`, `resources/read`, `prompts/get` |
 | **Multiple transports** | Streamable HTTP (MCP 2025) and SSE, with automatic fallback |
 | **Connection history** | Remembers the last 8 connections in the browser |
 
@@ -298,6 +299,37 @@ Below those are descriptive statistics:
 - **B only** (green tags) — primitives present on Server B but absent on Server A
 
 The count on the right of each row is the number of items in that group.
+
+### 10 — Protocol Messages
+
+After connecting (and during subsequent interactions), a **Protocol Messages** card appears at the bottom of the results area. It shows a cumulative, real-time history of every MCP JSON-RPC call made during the session — useful for debugging, auditing, and understanding exactly what an AI agent sends and receives.
+
+#### What is captured
+
+| Phase | Messages captured |
+|-------|-----------------|
+| **Connection** | `initialize` request/response; `tools/list`, `resources/list`, `prompts/list` request/response (skipped when the server does not advertise the corresponding capability) |
+| **Runtime** | `tools/call` request/response for each tool execution; `resources/read` request/response for each resource read; `prompts/get` request/response for each prompt render; error entries when a call fails |
+
+#### How to use
+
+- Click **Protocol Messages** to expand the card (a badge shows the total message count)
+- Each entry shows:
+  - `→` (request) · `←` (response) · `✕` (error) direction label
+  - The method name (`initialize`, `tools/call`, etc.)
+  - Elapsed milliseconds since the connection was established
+- Click any entry to expand it and view the full JSON payload
+- The history is cleared automatically on every new **Connect & Fetch Tools** click
+
+#### Limits
+
+| Limit | Value |
+|-------|-------|
+| Max messages stored | 200 — oldest entries are dropped when the cap is reached |
+| Max payload displayed | 5 000 characters per message — longer payloads are truncated with a note showing how many characters were cut |
+| Scope | Current browser tab only — cleared on reconnect |
+
+> **Note:** The `initialize` request body is reconstructed from MCP SDK constants (`LATEST_PROTOCOL_VERSION`, `DEFAULT_CLIENT_INFO`) and may not exactly match the wire-level bytes sent by the SDK. The `capabilities` field in particular shows a placeholder — actual capability negotiation depends on internal SDK callbacks that are not directly observable.
 
 ---
 
