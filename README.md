@@ -154,7 +154,7 @@ After a successful connection, an **Auth Inspector** section appears in the side
 
 #### SSO access token caching
 
-After a successful SSO login, the access token is cached in `localStorage` keyed by the MCP server URL. On subsequent connections to the same server:
+After a successful SSO login, the access token is cached in `sessionStorage` keyed by the MCP server URL. On subsequent connections to the same server:
 
 - If the cached token is still valid (with a 60-second buffer before expiry), the OAuth browser popup is **skipped** and the cached token is used directly. The sidebar shows `Using cached access token (expires in Xh Xm)`.
 - If the token has expired, the full SSO flow runs again automatically.
