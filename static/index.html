@@ -487,15 +487,16 @@ details summary::-webkit-details-marker { display: none; }
 .pm-entry:last-child { border-bottom: none; }
 .pm-header { display: flex; align-items: center; gap: 6px; padding: 6px 0; cursor: pointer; user-select: none; }
 .pm-header:hover .pm-method { color: var(--accent); }
-.pm-dir { font-size: 10px; font-family: "SF Mono","Fira Code",monospace; font-weight: 700; flex-shrink: 0; width: 22px; }
+.pm-dir { font-size: 11px; font-family: "SF Mono","Fira Code",monospace; font-weight: 700; flex-shrink: 0; width: 22px; }
 .pm-dir-req  { color: var(--accent); }
 .pm-dir-res  { color: var(--success); }
 .pm-dir-err  { color: var(--error); }
 .pm-method { font-size: 11px; font-family: "SF Mono","Fira Code",monospace; color: var(--text); flex: 1; }
-.pm-ts { font-size: 10px; color: var(--text-dim); flex-shrink: 0; }
+.pm-ts { font-size: 11px; color: var(--text-dim); flex-shrink: 0; }
 .pm-body { display: none; padding: 4px 0 8px 28px; }
 .pm-body.open { display: block; }
-.pm-json { font-size: 10px; font-family: "SF Mono","Fira Code",monospace; color: var(--text-dim); white-space: pre-wrap; word-break: break-all; background: var(--surface2); border-radius: 4px; padding: 6px 8px; margin: 0; max-height: 300px; overflow-y: auto; }
+.pm-json { font-size: 11px; font-family: "SF Mono","Fira Code",monospace; color: var(--text); white-space: pre-wrap; word-break: break-all; background: var(--bg); border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 8px 10px; margin: 0; max-height: 400px; overflow-y: auto; line-height: 1.6; }
+.pm-copy-btn { margin-top: 6px; padding: 3px 10px; font-size: 11px; border-radius: var(--radius-sm); cursor: pointer; border: 1px solid var(--border); background: var(--surface2); color: var(--text-muted); }
 .pm-truncated { font-size: 10px; color: var(--text-dim); font-style: italic; margin-top: 3px; }
 .pm-badge { font-size: 10px; font-weight: 600; color: var(--text-muted); background: var(--surface2); border-radius: 8px; padding: 1px 6px; }
 
@@ -1317,6 +1318,15 @@ function refreshProtoMessages() {
   if (badge) badge.textContent = protocolHistory.length;
 }
 
+function copyProtoMsg(idx) {
+  const msg = protocolHistory[idx];
+  if (!msg) return;
+  navigator.clipboard.writeText(JSON.stringify(msg.body, null, 2)).then(() => {
+    const btn = document.getElementById(`pm-copy-${idx}`);
+    if (btn) { btn.textContent = '✓ Copied'; setTimeout(() => btn.textContent = 'Copy', 1200); }
+  });
+}
+
 function renderProtoList() {
   if (!protocolHistory.length) return '<div style="font-size:11px;color:var(--text-dim);padding:6px 0">No messages yet.</div>';
   return protocolHistory.map((msg, i) => {
@@ -1335,6 +1345,7 @@ function renderProtoList() {
       <div class="pm-body">
         <pre class="pm-json">${escHtml(display)}</pre>
         ${truncated ? `<div class="pm-truncated">… truncated (${raw.length - MAX_PAYLOAD_CHARS} more chars)</div>` : ''}
+        <button class="pm-copy-btn" id="pm-copy-${i}" onclick="copyProtoMsg(${i})">Copy</button>
       </div>
     </div>`;
   }).join('');
