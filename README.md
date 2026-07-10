@@ -5,6 +5,10 @@ Connect to any MCP server, browse its **Tools, Resources, and Prompts**, measure
 
 ---
 
+![MCP Server Tester](mcp-server-tester.png)
+
+---
+
 ## Features
 
 | Feature | Details |
