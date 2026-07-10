@@ -918,7 +918,7 @@ function onProviderChange() {
   document.getElementById('api-settings').style.display  = p === 'claude' ? 'flex' : 'none';
   document.getElementById('openai-caveat').style.display = p.startsWith('openai') ? 'block' : 'none';
   if (p === 'claude') {
-    const saved = localStorage.getItem('claude-api-key');
+    const saved = sessionStorage.getItem('claude-api-key');
     if (saved && !document.getElementById('api-key').value) document.getElementById('api-key').value = saved;
   }
   _syncCountBtn();
@@ -955,10 +955,10 @@ function _syncCountBtn() {
   btn.textContent   = p === 'claude' ? 'Count with Claude API' : 'Count with tiktoken';
 }
 document.getElementById('api-key').addEventListener('input', e => {
-  if (e.target.value) localStorage.setItem('claude-api-key', e.target.value);
+  if (e.target.value) sessionStorage.setItem('claude-api-key', e.target.value);
 });
 // Restore key on load
-const _savedKey = localStorage.getItem('claude-api-key');
+const _savedKey = sessionStorage.getItem('claude-api-key');
 if (_savedKey) document.getElementById('api-key').value = _savedKey;
 
 // ── History ──────────────────────────────────────────────────────

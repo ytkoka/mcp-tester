@@ -16,8 +16,7 @@ Connect to any MCP server, browse its **Tools, Resources, and Prompts**, measure
 | **Tool inspection** | Lists all tools with name, description, parameter breakdown, and input schema |
 | **Resource inspection** | Lists all resources with URI, name, mimeType; read any resource to view its contents |
 | **Prompt inspection** | Lists all prompts with arguments; fill in arguments and render the prompt messages |
-| **Token estimation** | Estimates input tokens per Claude API request (~4 chars/token heuristic) |
-| **Accurate token counting** | Calls `POST /v1/messages/count_tokens` with your Anthropic API key for exact counts |
+| **Token counting** | Four provider options: Generic estimate (~4 chars/token), Claude API (accurate, uses `count_tokens`), OpenAI GPT-4o / o-series (tiktoken o200k_base), OpenAI GPT-4 / GPT-3.5 (tiktoken cl100k_base) |
 | **Fetch timing** | Shows MCP server fetch time, roundtrip time, and a per-phase timing breakdown waterfall |
 | **Auth Inspector** | After connecting, shows the auth method used, headers sent, decoded access token claims (exp, iss, sub, scope), and OAuth endpoints; SSO access tokens are cached and reused until expiry |
 | **LLM Readiness Score** | Grades tool definitions A–F across 5 dimensions; highlights which tools need improvement |
@@ -201,18 +200,20 @@ Use the **Search prompts…** box to filter by name or description.
 
 ### 6 — Token counting
 
-**Estimate mode** (default)  
-Uses `~4 chars / token` as a rough approximation. The badge shows `~N`.
+Select a provider in the **Token Counting** section of the sidebar. Switching providers automatically re-counts without needing to reconnect.
 
-**Claude API mode** (accurate)  
-1. Select **Claude API (accurate)** in the *Token Counting* section of the sidebar
-2. Paste your `sk-ant-api03-…` API key (saved to `localStorage`)
-3. Choose a model (Haiku 4.5 / Sonnet 4.6 / Opus 4.8)
+| Provider | Method | API key required |
+|----------|--------|-----------------|
+| **Generic estimate** (default) | `~4 chars / token` heuristic | No |
+| **Claude (Anthropic API)** | `POST /v1/messages/count_tokens` with tools — exact | Yes (`sk-ant-api03-…`) |
+| **OpenAI GPT-4o / o-series** | tiktoken `o200k_base` encoding | No |
+| **OpenAI GPT-4 / GPT-3.5** | tiktoken `cl100k_base` encoding | No |
 
-After connecting, click **Count with Claude API**. The tool makes two parallel calls to `POST /v1/messages/count_tokens` — once with all tools, once without — and reports the difference as the accurate tool token cost. Badges update to show exact counts.
+**Claude API mode** — select the model (Haiku 4.5 / Sonnet 4.6 / Opus 4.8), paste your API key (stored in `sessionStorage` — cleared when the tab is closed), and click **Count with Claude API**. Two parallel calls are made to `count_tokens` (with and without tools); the difference is the accurate tool token cost.
 
-> **Note:** Per-tool counts are proportionally scaled from the accurate total.  
-> The total figure is exact; individual tool figures are an approximation within that total.
+> **Note (Claude):** Per-tool counts are proportionally scaled from the accurate total. The total is exact; individual tool figures are an approximation within that total.
+
+> **Note (tiktoken):** tiktoken counts tokens in the tool definition JSON. The overhead from OpenAI's internal function-calling format expansion is not included, so actual consumption may be slightly higher.
 
 ### 7 — Copy tool definitions
 
