@@ -12,6 +12,7 @@ URL="http://localhost:${PORT}"
 # Start the server in the background
 .venv/bin/python main.py &
 SERVER_PID=$!
+trap 'kill $SERVER_PID 2>/dev/null' EXIT INT TERM
 
 # Wait for the server to be ready (up to 15 seconds)
 echo "Waiting for server to start..."
