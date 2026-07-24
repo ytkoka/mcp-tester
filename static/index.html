@@ -1457,7 +1457,7 @@ function renderResults(data, roundtripMs) {
 
     ${renderScoreCard(currentTools)}
 
-    ${renderPoisoningCard(currentTools, currentConnection ? currentConnection.url : '')}
+    ${renderPoisoningCardSkeleton(currentTools)}
 
     <div>
       <div class="primitive-tabs">
@@ -1513,6 +1513,7 @@ function renderResults(data, roundtripMs) {
   renderPromptList(currentPrompts);
   updateCostCard();
   _syncCountBtn();
+  loadPoisoningCard(currentTools, currentConnection ? currentConnection.url : '');
 }
 
 function switchTab(tab) {
@@ -2538,12 +2539,31 @@ const POISON_PATTERNS = [
   ['high', 'exfiltration', /\benv(ironment)?\s+variables?\b[\s\S]{0,40}\b(send|post|upload|exfiltrate|leak)\b/i, 'Requests exfiltration of environment variables'],
   ['high', 'exfiltration', /\b(send|post|upload|forward)\b[\s\S]{0,40}\bto\b[\s\S]{0,10}https?:\/\//i, 'Requests sending data to an external URL'],
   ['medium', 'hidden-content', /<!\x2d\x2d[\s\S]*?\x2d\x2d>/, 'Contains an HTML/Markdown comment that may render invisibly'],
-  ['low', 'encoded-blob', /[A-Za-z0-9+\/]{60,}={0,2}/, 'Contains a long base64-like blob'],
 ];
 
-const INVISIBLE_CHAR_RE = /[\u200b\u200c\u200d\u2060\ufeff\u202a-\u202e\u2066-\u2069]/;
+// BMP zero-width / bidi-control characters, plus variation selectors.
+const INVISIBLE_CHAR_RE = /[\u200b\u200c\u200d\u2060\ufeff\u202a-\u202e\u2066-\u2069\ufe00-\ufe0f]/u;
+// Unicode Tag block (U+E0000\u2013U+E007F, astral \u2014 needs the /u flag): can encode arbitrary
+// hidden ASCII text ("ASCII smuggling"), a known technique for invisible LLM prompt injection.
+const TAG_CHAR_RE = /[\u{E0000}-\u{E007F}]/u;
 // All-caps only, to avoid flagging ordinary lowercase usage ("always returns JSON").
 const AUTHORITY_WORDS_RE = /\b(IMPORTANT|MUST|ALWAYS|NEVER|CRITICAL|MANDATORY)\b/g;
+
+// \u2500\u2500 Encoded-blob detection (with false-positive exclusions) \u2500\u2500\u2500\u2500\u2500\u2500
+const BASE64_BLOB_RE = /[A-Za-z0-9+\/]{60,}={0,2}/;
+const HEX_ONLY_RE = /^[0-9a-fA-F]+$/;              // SHA-1/SHA-256/etc. checksums
+const JWT_RE = /eyJ[A-Za-z0-9_-]{2,}\.[A-Za-z0-9_-]{2,}\.[A-Za-z0-9_-]{2,}/; // header.payload.signature
+const DATA_URI_RE = /data:[a-z0-9.+-]+\/[a-z0-9.+-]+;base64,/i;
+
+function _scanEncodedBlob(text) {
+  if (!text || DATA_URI_RE.test(text)) return [];   // declared data: URI \u2014 a base64 payload is expected
+  const m = text.match(BASE64_BLOB_RE);
+  if (!m) return [];
+  if (HEX_ONLY_RE.test(m[0])) return [];             // e.g. a hex checksum, not an encoded payload
+  if (JWT_RE.test(text)) return [];                  // e.g. an example JWT/access token
+  return [{ severity: 'low', category: 'encoded-blob', detail: 'Contains a long base64-like blob',
+    snippet: _poisonSnippet(text, m.index, m[0].length) }];
+}
 
 const POISON_CATEGORY_LABELS = {
   'hidden-unicode': 'Hidden Unicode',
@@ -2569,13 +2589,22 @@ function _scanTextForPoisoning(text) {
   if (invisMatch) {
     findings.push({ severity: 'high', category: 'hidden-unicode',
       detail: 'Contains invisible/control Unicode characters that can hide text from the UI',
-      snippet: _poisonSnippet(text, invisMatch.index, 1) });
+      snippet: _poisonSnippet(text, invisMatch.index, invisMatch[0].length) });
+  }
+
+  const tagMatch = text.match(TAG_CHAR_RE);
+  if (tagMatch) {
+    findings.push({ severity: 'high', category: 'hidden-unicode',
+      detail: 'Contains Unicode Tag characters (U+E0000–U+E007F) — a known technique for smuggling invisible text into LLM prompts ("ASCII smuggling")',
+      snippet: _poisonSnippet(text, tagMatch.index, tagMatch[0].length) });
   }
 
   POISON_PATTERNS.forEach(([severity, category, re, detail]) => {
     const m = text.match(re);
     if (m) findings.push({ severity, category, detail, snippet: _poisonSnippet(text, m.index, m[0].length) });
   });
+
+  findings.push(..._scanEncodedBlob(text));
 
   const authorityMatches = text.match(AUTHORITY_WORDS_RE);
   if (authorityMatches && authorityMatches.length >= 3) {
@@ -2587,30 +2616,52 @@ function _scanTextForPoisoning(text) {
   return findings;
 }
 
-function _hashStr(s) {
-  let h = 5381;
-  for (let i = 0; i < s.length; i++) h = ((h << 5) + h + s.charCodeAt(i)) >>> 0;
-  return h.toString(16);
+// Deterministic key-sorted JSON so semantically identical objects always serialize the
+// same way, regardless of the property order the server happened to send them in.
+function _canonicalJson(value) {
+  if (Array.isArray(value)) return '[' + value.map(_canonicalJson).join(',') + ']';
+  if (value && typeof value === 'object') {
+    const keys = Object.keys(value).sort();
+    return '{' + keys.map(k => JSON.stringify(k) + ':' + _canonicalJson(value[k])).join(',') + '}';
+  }
+  return JSON.stringify(value);
 }
 
+async function _sha256Hex(s) {
+  const bytes = new TextEncoder().encode(s);
+  const digest = await crypto.subtle.digest('SHA-256', bytes);
+  return Array.from(new Uint8Array(digest)).map(b => b.toString(16).padStart(2, '0')).join('');
+}
+
+// v2 = SHA-256 over canonical JSON. v1 used a 32-bit djb2 hash over JSON.stringify() output,
+// which a malicious server could deliberately collide (e.g. by padding with a few invisible
+// characters) and which false-positived on semantically-equal-but-reordered schemas. Bumping
+// the storage key makes old v1 entries inert instead of being compared against v2 hashes.
+const TOOL_SNAPSHOT_STORAGE_KEY = 'mcp-tool-snapshots-v2';
+
 function _loadToolSnapshots() {
-  try { return JSON.parse(localStorage.getItem('mcp-tool-snapshots') || '{}'); } catch { return {}; }
+  try { localStorage.removeItem('mcp-tool-snapshots'); } catch { /* storage unavailable */ }
+  try { return JSON.parse(localStorage.getItem(TOOL_SNAPSHOT_STORAGE_KEY) || '{}'); } catch { return {}; }
 }
 function _saveToolSnapshots(snap) {
-  try { localStorage.setItem('mcp-tool-snapshots', JSON.stringify(snap)); } catch { /* storage unavailable */ }
+  try { localStorage.setItem(TOOL_SNAPSHOT_STORAGE_KEY, JSON.stringify(snap)); } catch { /* storage unavailable */ }
 }
 
 // "MCP rug pull": a server silently changes a tool's description/schema after the user
 // already approved it. We pin a hash of each tool per server URL and diff on reconnect.
-function checkRugPull(tools, serverUrl) {
-  const findings = [];
-  if (!serverUrl) return findings;
+async function checkRugPull(tools, serverUrl) {
+  if (!serverUrl || typeof crypto === 'undefined' || !crypto.subtle) return [];
   const all = _loadToolSnapshots();
   const prev = all[serverUrl] || {};
-  const next = {};
 
-  tools.forEach(t => {
-    const sig = _hashStr(JSON.stringify({ d: t.description || '', s: t.inputSchema || {} }));
+  const sigs = await Promise.all(tools.map(t =>
+    _sha256Hex(_canonicalJson({ d: t.description || '', s: t.inputSchema || {} }))
+  ));
+
+  const findings = [];
+  const next = {};
+  tools.forEach((t, i) => {
+    const sig = sigs[i];
     next[t.name] = sig;
     if (prev[t.name] && prev[t.name] !== sig) {
       findings.push({
@@ -2626,7 +2677,7 @@ function checkRugPull(tools, serverUrl) {
   return findings;
 }
 
-function scanToolPoisoning(tools, serverUrl) {
+async function scanToolPoisoning(tools, serverUrl) {
   const findings = [];
   tools.forEach(t => {
     let schemaText = '';
@@ -2638,7 +2689,7 @@ function scanToolPoisoning(tools, serverUrl) {
     ].forEach(f => findings.push({ ...f, tool: t.name }));
   });
 
-  findings.push(...checkRugPull(tools, serverUrl));
+  findings.push(...await checkRugPull(tools, serverUrl));
 
   const sevScore = { high: 30, medium: 12, low: 5 };
   const deduction = findings.reduce((sum, f) => sum + (sevScore[f.severity] || 0), 0);
@@ -2655,27 +2706,56 @@ function poisonGrade(v) {
   return               { grade: 'F', label: 'High risk — manual review required', color: 'var(--error)'   };
 }
 
-function renderPoisoningCard(tools, serverUrl) {
+// crypto.subtle.digest() is async, so the card is rendered in two steps: a synchronous
+// skeleton goes into the initial page render, then loadPoisoningCard() fills it in once the
+// SHA-256 rug-pull check resolves. _poisonScanSeq guards against a stale scan (from a
+// previous connect) overwriting a newer one if the user reconnects while one is in flight.
+let _poisonScanSeq = 0;
+
+function renderPoisoningCardSkeleton(tools) {
   if (!tools.length) return '';
-  const s = scanToolPoisoning(tools, serverUrl);
+  return `<div class="card" id="poison-card">
+    <div class="card-title">Tool Poisoning Risk</div>
+    <div id="poison-card-body" style="font-size:12px;color:var(--text-dim);display:flex;align-items:center;gap:8px">
+      <span class="spinner"></span> Scanning ${tools.length} tool${tools.length !== 1 ? 's' : ''}…
+    </div>
+  </div>`;
+}
+
+async function loadPoisoningCard(tools, serverUrl) {
+  if (!tools.length) return;
+  const mySeq = ++_poisonScanSeq;
+  const s = await scanToolPoisoning(tools, serverUrl);
+  if (mySeq !== _poisonScanSeq) return; // superseded by a newer connect
+  const bodyEl = document.getElementById('poison-card-body');
+  if (!bodyEl) return; // card no longer in the DOM
+  bodyEl.outerHTML = renderPoisoningCardBody(s);
+}
+
+function renderPoisoningCardBody(s) {
   const g = poisonGrade(s.overall);
 
   const order = { high: 0, medium: 1, low: 2 };
   const sorted = [...s.findings].sort((a, b) => order[a.severity] - order[b.severity]);
 
-  const findingsHtml = sorted.map(f => `
-    <div class="poison-finding sev-${f.severity}">
+  const findingsHtml = sorted.map(f => {
+    // Whitelist severity into a fixed literal before using it in an HTML attribute —
+    // f.severity only ever comes from our own fixed 'high'|'medium'|'low' literals today,
+    // but this keeps the attribute context safe even if that invariant is ever broken.
+    const sevClass = f.severity === 'high' ? 'high' : f.severity === 'medium' ? 'medium' : 'low';
+    return `
+    <div class="poison-finding sev-${sevClass}">
       <div class="poison-finding-head">
-        <span class="poison-sev-tag">${f.severity}</span>
+        <span class="poison-sev-tag">${escHtml(f.severity)}</span>
         <span class="poison-tool-name">${escHtml(f.tool || '—')}</span>
         <span class="poison-category">${escHtml(POISON_CATEGORY_LABELS[f.category] || f.category)}</span>
       </div>
       <div class="poison-detail">${escHtml(f.detail)}</div>
       ${f.snippet ? `<code class="poison-snippet">${escHtml(f.snippet)}</code>` : ''}
-    </div>`).join('');
+    </div>`;
+  }).join('');
 
-  return `<div class="card">
-    <div class="card-title">Tool Poisoning Risk</div>
+  return `<div id="poison-card-body">
     <div class="score-header">
       <div class="score-grade" style="color:${g.color}">${g.grade}</div>
       <div>
