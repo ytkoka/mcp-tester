@@ -447,6 +447,28 @@ details summary::-webkit-details-marker { display: none; }
   background: rgba(248,81,73,0.07); border: 1px solid rgba(248,81,73,0.22); color: #ff9492; }
 .score-grade-badge { font-size: 15px; font-weight: 800; margin-right: 3px; }
 
+/* ── Tool Poisoning Risk Card ─────────────────────────────────── */
+.poison-findings { display: flex; flex-direction: column; gap: 8px; margin-top: 12px; }
+.poison-finding { border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 8px 10px; font-size: 12px; }
+.poison-finding.sev-high   { border-color: rgba(248,81,73,0.35);  background: rgba(248,81,73,0.06); }
+.poison-finding.sev-medium { border-color: rgba(227,112,10,0.35); background: rgba(227,112,10,0.06); }
+.poison-finding.sev-low    { border-color: rgba(210,180,50,0.35); background: rgba(210,180,50,0.06); }
+.poison-finding-head { display: flex; align-items: center; gap: 6px; margin-bottom: 3px; }
+.poison-sev-tag { font-size: 9px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.03em;
+  padding: 1px 6px; border-radius: 999px; }
+.sev-high   .poison-sev-tag { background: rgba(248,81,73,0.18);  color: #ff9492; }
+.sev-medium .poison-sev-tag { background: rgba(227,112,10,0.18); color: #ffb066; }
+.sev-low    .poison-sev-tag { background: rgba(210,180,50,0.18); color: #e3d24a; }
+.poison-tool-name { font-weight: 600; color: var(--text); }
+.poison-category { color: var(--text-dim); font-size: 11px; margin-left: auto; }
+.poison-detail { color: var(--text-muted); }
+.poison-snippet { display: block; margin-top: 4px; padding: 4px 6px; background: var(--surface2);
+  border-radius: 4px; font-family: monospace; font-size: 11px; color: var(--text-dim);
+  white-space: pre-wrap; word-break: break-all; }
+.poison-clean { margin-top: 10px; font-size: 12px; color: var(--success); }
+.poison-llm-row { margin-top: 12px; padding-top: 10px; border-top: 1px solid var(--border);
+  display: flex; align-items: center; justify-content: space-between; gap: 8px; flex-wrap: wrap; }
+
 /* ── Cost Estimate Card ───────────────────────────────────────── */
 .cost-inputs { display: flex; gap: 16px; margin-bottom: 14px; }
 .cost-inputs > div { flex: 1; }
@@ -1434,6 +1456,8 @@ function renderResults(data, roundtripMs) {
     </div>
 
     ${renderScoreCard(currentTools)}
+
+    ${renderPoisoningCard(currentTools, currentConnection ? currentConnection.url : '')}
 
     <div>
       <div class="primitive-tabs">
@@ -2495,6 +2519,232 @@ function renderScoreCard(tools) {
       ? `<div class="score-warnings">${warnLines.map(w => `<span class="score-warn-tag">⚠ ${escHtml(w)}</span>`).join('')}</div>`
       : `<div style="margin-top:10px;font-size:12px;color:var(--success)">✓ No issues detected</div>`}
   </div>`;
+}
+
+// ── Tool Poisoning Risk Scan ─────────────────────────────────────
+// Heuristics for MCP "tool poisoning": hidden/manipulative instructions embedded in a
+// tool's name, description, or input schema that try to steer the calling LLM agent
+// (e.g. https://invariantlabs.ai/blog/mcp-security-notification-tool-poisoning-attacks).
+const POISON_PATTERNS = [
+  ['high', 'prompt-injection', /ignore\s+(all|any|previous|prior|the)\s+(system\s+)?instructions?/i, 'Attempts to override prior instructions'],
+  ['high', 'prompt-injection', /disregard\s+(all|any|previous|prior)\s+(system\s+)?instructions?/i, 'Attempts to override prior instructions'],
+  ['high', 'prompt-injection', /\bdo\s?not\s+(tell|inform|notify|mention|show)\s+(the\s+)?user\b/i, 'Instructs the model to hide actions from the user'],
+  ['high', 'prompt-injection', /\bwithout\s+(asking|telling|informing|notifying)\s+(the\s+)?user\b/i, 'Instructs the model to bypass user confirmation'],
+  ['high', 'prompt-injection', /\b(always|you\s+must)\s+call\s+this\s+tool\s+(first|before)/i, 'Coerces tool-call ordering / self-preference'],
+  ['high', 'prompt-injection', /<\s*\/?\s*(system|assistant)\s*>/i, 'Embeds fake role tags to spoof system/assistant turns'],
+  ['high', 'prompt-injection', /\bsystem\s+prompt\b/i, 'References system prompt manipulation'],
+  ['high', 'exfiltration', /~\/\.ssh|id_rsa|id_ed25519/i, 'References SSH private key material'],
+  ['high', 'exfiltration', /\.aws[\/\\]credentials|aws_secret_access_key/i, 'References AWS credential files'],
+  ['high', 'exfiltration', /\benv(ironment)?\s+variables?\b[\s\S]{0,40}\b(send|post|upload|exfiltrate|leak)\b/i, 'Requests exfiltration of environment variables'],
+  ['high', 'exfiltration', /\b(send|post|upload|forward)\b[\s\S]{0,40}\bto\b[\s\S]{0,10}https?:\/\//i, 'Requests sending data to an external URL'],
+  ['medium', 'hidden-content', /<!\x2d\x2d[\s\S]*?\x2d\x2d>/, 'Contains an HTML/Markdown comment that may render invisibly'],
+  ['low', 'encoded-blob', /[A-Za-z0-9+\/]{60,}={0,2}/, 'Contains a long base64-like blob'],
+];
+
+const INVISIBLE_CHAR_RE = /[\u200b\u200c\u200d\u2060\ufeff\u202a-\u202e\u2066-\u2069]/;
+// All-caps only, to avoid flagging ordinary lowercase usage ("always returns JSON").
+const AUTHORITY_WORDS_RE = /\b(IMPORTANT|MUST|ALWAYS|NEVER|CRITICAL|MANDATORY)\b/g;
+
+const POISON_CATEGORY_LABELS = {
+  'hidden-unicode': 'Hidden Unicode',
+  'prompt-injection': 'Prompt Injection',
+  'exfiltration': 'Data Exfiltration',
+  'hidden-content': 'Hidden Content',
+  'encoded-blob': 'Encoded Blob',
+  'authority-language': 'Authority Language',
+  'rug-pull': 'Rug Pull',
+};
+
+function _poisonSnippet(text, idx, len) {
+  const start = Math.max(0, idx - 20);
+  const end = Math.min(text.length, idx + len + 20);
+  return (start > 0 ? '…' : '') + text.slice(start, end).replace(/\s+/g, ' ').trim() + (end < text.length ? '…' : '');
+}
+
+function _scanTextForPoisoning(text) {
+  const findings = [];
+  if (!text) return findings;
+
+  const invisMatch = text.match(INVISIBLE_CHAR_RE);
+  if (invisMatch) {
+    findings.push({ severity: 'high', category: 'hidden-unicode',
+      detail: 'Contains invisible/control Unicode characters that can hide text from the UI',
+      snippet: _poisonSnippet(text, invisMatch.index, 1) });
+  }
+
+  POISON_PATTERNS.forEach(([severity, category, re, detail]) => {
+    const m = text.match(re);
+    if (m) findings.push({ severity, category, detail, snippet: _poisonSnippet(text, m.index, m[0].length) });
+  });
+
+  const authorityMatches = text.match(AUTHORITY_WORDS_RE);
+  if (authorityMatches && authorityMatches.length >= 3) {
+    findings.push({ severity: 'medium', category: 'authority-language',
+      detail: `Unusually forceful/imperative language (${[...new Set(authorityMatches)].join(', ')})`,
+      snippet: _poisonSnippet(text, text.search(AUTHORITY_WORDS_RE), 10) });
+  }
+
+  return findings;
+}
+
+function _hashStr(s) {
+  let h = 5381;
+  for (let i = 0; i < s.length; i++) h = ((h << 5) + h + s.charCodeAt(i)) >>> 0;
+  return h.toString(16);
+}
+
+function _loadToolSnapshots() {
+  try { return JSON.parse(localStorage.getItem('mcp-tool-snapshots') || '{}'); } catch { return {}; }
+}
+function _saveToolSnapshots(snap) {
+  try { localStorage.setItem('mcp-tool-snapshots', JSON.stringify(snap)); } catch { /* storage unavailable */ }
+}
+
+// "MCP rug pull": a server silently changes a tool's description/schema after the user
+// already approved it. We pin a hash of each tool per server URL and diff on reconnect.
+function checkRugPull(tools, serverUrl) {
+  const findings = [];
+  if (!serverUrl) return findings;
+  const all = _loadToolSnapshots();
+  const prev = all[serverUrl] || {};
+  const next = {};
+
+  tools.forEach(t => {
+    const sig = _hashStr(JSON.stringify({ d: t.description || '', s: t.inputSchema || {} }));
+    next[t.name] = sig;
+    if (prev[t.name] && prev[t.name] !== sig) {
+      findings.push({
+        severity: 'high', tool: t.name, category: 'rug-pull',
+        detail: 'Tool definition (description or schema) changed since it was last seen on this server — possible "rug pull"',
+        snippet: '',
+      });
+    }
+  });
+
+  all[serverUrl] = next;
+  _saveToolSnapshots(all);
+  return findings;
+}
+
+function scanToolPoisoning(tools, serverUrl) {
+  const findings = [];
+  tools.forEach(t => {
+    let schemaText = '';
+    try { schemaText = JSON.stringify(t.inputSchema || {}); } catch { /* ignore */ }
+    [
+      ..._scanTextForPoisoning(t.name || ''),
+      ..._scanTextForPoisoning(t.description || ''),
+      ..._scanTextForPoisoning(schemaText),
+    ].forEach(f => findings.push({ ...f, tool: t.name }));
+  });
+
+  findings.push(...checkRugPull(tools, serverUrl));
+
+  const sevScore = { high: 30, medium: 12, low: 5 };
+  const deduction = findings.reduce((sum, f) => sum + (sevScore[f.severity] || 0), 0);
+  const overall = Math.max(0, 100 - deduction);
+
+  return { overall, findings, toolCount: tools.length };
+}
+
+function poisonGrade(v) {
+  if (v >= 95) return { grade: 'A', label: 'No issues detected',                  color: 'var(--success)' };
+  if (v >= 80) return { grade: 'B', label: 'Minor concerns',                      color: 'var(--accent)'  };
+  if (v >= 60) return { grade: 'C', label: 'Review recommended',                  color: 'var(--warning)' };
+  if (v >= 35) return { grade: 'D', label: 'Suspicious patterns found',           color: '#e3700a'        };
+  return               { grade: 'F', label: 'High risk — manual review required', color: 'var(--error)'   };
+}
+
+function renderPoisoningCard(tools, serverUrl) {
+  if (!tools.length) return '';
+  const s = scanToolPoisoning(tools, serverUrl);
+  const g = poisonGrade(s.overall);
+
+  const order = { high: 0, medium: 1, low: 2 };
+  const sorted = [...s.findings].sort((a, b) => order[a.severity] - order[b.severity]);
+
+  const findingsHtml = sorted.map(f => `
+    <div class="poison-finding sev-${f.severity}">
+      <div class="poison-finding-head">
+        <span class="poison-sev-tag">${f.severity}</span>
+        <span class="poison-tool-name">${escHtml(f.tool || '—')}</span>
+        <span class="poison-category">${escHtml(POISON_CATEGORY_LABELS[f.category] || f.category)}</span>
+      </div>
+      <div class="poison-detail">${escHtml(f.detail)}</div>
+      ${f.snippet ? `<code class="poison-snippet">${escHtml(f.snippet)}</code>` : ''}
+    </div>`).join('');
+
+  return `<div class="card">
+    <div class="card-title">Tool Poisoning Risk</div>
+    <div class="score-header">
+      <div class="score-grade" style="color:${g.color}">${g.grade}</div>
+      <div>
+        <div class="score-number">${s.overall}<span style="font-size:14px;font-weight:400;color:var(--text-dim)">/100</span></div>
+        <div style="font-size:11px;color:${g.color};margin-top:2px">${g.label}</div>
+      </div>
+      <div style="margin-left:auto;font-size:11px;color:var(--text-dim);align-self:flex-end">
+        heuristic scan · ${s.toolCount} tool${s.toolCount !== 1 ? 's' : ''}
+      </div>
+    </div>
+    ${findingsHtml
+      ? `<div class="poison-findings">${findingsHtml}</div>`
+      : `<div class="poison-clean">✓ No suspicious patterns detected</div>`}
+    <div class="poison-llm-row">
+      <span style="font-size:11px;color:var(--text-dim)">Heuristics catch known patterns only — for a deeper semantic check:</span>
+      <span style="display:flex;align-items:center;gap:8px">
+        <button class="btn-count" id="poison-llm-btn" onclick="runLLMSecurityScan()">Deep scan with Claude API</button>
+        <span id="poison-llm-status" style="font-size:11px"></span>
+      </span>
+    </div>
+    <div id="poison-llm-results"></div>
+  </div>`;
+}
+
+async function runLLMSecurityScan() {
+  const apiKey = document.getElementById('api-key').value.trim();
+  if (!apiKey) {
+    document.getElementById('api-settings').style.display = 'flex';
+    document.getElementById('api-key').focus();
+    return;
+  }
+  const btn = document.getElementById('poison-llm-btn');
+  const status = document.getElementById('poison-llm-status');
+  const resultsEl = document.getElementById('poison-llm-results');
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spinner"></span> Scanning...';
+  status.textContent = '';
+  resultsEl.innerHTML = '';
+
+  try {
+    const resp = await fetch('/api/security-scan', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ tools: currentTools, api_key: apiKey, model: document.getElementById('api-model').value }),
+    });
+    const data = await resp.json();
+    if (!resp.ok || !data.success) throw new Error(data.error || 'Scan failed');
+
+    status.innerHTML = `<span style="color:var(--success)">✓ done</span>`;
+    const flagged = (data.findings || []).filter(f => f.risk && f.risk !== 'none');
+    if (!flagged.length) {
+      resultsEl.innerHTML = `<div class="poison-clean">✓ Claude found no additional concerns</div>`;
+    } else {
+      resultsEl.innerHTML = `<div class="poison-findings">${flagged.map(f => `
+        <div class="poison-finding sev-${f.risk === 'high' ? 'high' : f.risk === 'medium' ? 'medium' : 'low'}">
+          <div class="poison-finding-head">
+            <span class="poison-sev-tag">${escHtml(f.risk)}</span>
+            <span class="poison-tool-name">${escHtml(f.tool || '—')}</span>
+            <span class="poison-category">LLM analysis</span>
+          </div>
+          <div class="poison-detail">${escHtml(f.reason || '')}</div>
+        </div>`).join('')}</div>`;
+    }
+  } catch (e) {
+    status.innerHTML = `<span style="color:var(--error)">${escHtml(e.message)}</span>`;
+  } finally {
+    btn.disabled = false;
+    btn.textContent = 'Deep scan with Claude API';
+  }
 }
 
 // ── Compare Mode ──────────────────────────────────────────────────

@@ -20,6 +20,7 @@ Connect to any MCP server, browse its **Tools, Resources, and Prompts**, measure
 | **Fetch timing** | Shows MCP server fetch time, roundtrip time, and a per-phase timing breakdown waterfall |
 | **Auth Inspector** | After connecting, shows the auth method used, headers sent, decoded access token claims (exp, iss, sub, scope), and OAuth endpoints; SSO access tokens are cached and reused until expiry |
 | **LLM Readiness Score** | Grades tool definitions A–F across 5 dimensions; highlights which tools need improvement |
+| **Tool Poisoning Risk** | Heuristic scan for MCP tool poisoning attacks (hidden Unicode, prompt-injection phrasing, credential-exfiltration hints, hidden HTML comments) plus "rug pull" detection (tool description/schema silently changed since last connect to the same server); optional deeper scan via the Claude API |
 | **Compare Mode** | Connects to two servers in parallel and compares performance, tokens, quality scores, and documentation |
 | **Multiple auth methods** | None · Bearer Token · OAuth2 Client Credentials · SSO (Authorization Code + PKCE) · Custom Header |
 | **SSO auto-discovery** | Discovers OAuth endpoints from `/.well-known/oauth-authorization-server` and MCP `WWW-Authenticate` headers |
@@ -256,7 +257,39 @@ Each dimension scores 0–100. The **Overall Score** is the weighted average.
   - *N tools have undescribed parameters*
   - *N tools missing required annotation*
 
-### 9 — Compare two servers
+### 9 — Tool Poisoning Risk
+
+After connecting, a **Tool Poisoning Risk** card appears below the LLM Readiness Score. It scans every tool's name, description, and input schema for signs of an [MCP tool poisoning attack](https://invariantlabs.ai/blog/mcp-security-notification-tool-poisoning-attacks) — hidden or manipulative instructions embedded in a tool definition that try to steer the calling LLM agent rather than describe the tool itself.
+
+#### Heuristic checks (run automatically, no API key needed)
+
+| Category | What is detected |
+|----------|-------------------|
+| Hidden Unicode | Zero-width characters, bidi/RTL overrides, and other invisible or control characters that can hide text from the UI |
+| Prompt injection | Phrasing like "ignore previous instructions", "do not tell the user", "always call this tool first", or fake `<system>`/`<assistant>` role tags |
+| Data exfiltration | References to SSH keys, AWS credentials, or instructions to send environment variables / data to an external URL |
+| Hidden content | HTML/Markdown comments (`<!-- -->`) embedded in a description, which can render invisibly in some UIs |
+| Authority language | Excessive ALL-CAPS imperatives (`IMPORTANT`, `MUST`, `ALWAYS`, ...) used as a social-engineering pressure tactic |
+| Encoded blobs | Long base64-like strings that may carry a smuggled payload |
+
+Each finding is high/medium/low severity; the **Overall Score** starts at 100 and is docked per finding (high −30, medium −12, low −5), graded A–F the same way as the Readiness Score.
+
+#### Rug pull detection
+
+A tool's definition can legitimately change between releases — or a malicious server can silently rewrite a tool's description/schema *after* a user has already approved it ("MCP rug pull"). The scan hashes each tool's description + schema per server URL and stores it in the browser (`localStorage`). On a later reconnect to the same URL, any tool whose hash changed is flagged as a high-severity **Rug Pull** finding.
+
+This is a local, per-browser pin — it resets if you clear site data, and only tracks servers you've connected to from this browser.
+
+#### Deep scan with Claude API (optional)
+
+Heuristics only catch known patterns. Click **Deep scan with Claude API** (reuses the API key entered for [token counting](#6--token-counting)) to send tool definitions to Claude for a semantic risk assessment — useful for catching intent that doesn't match a fixed pattern (e.g. paraphrased instructions). The request is proxied through `/api/security-scan`; your API key is never stored server-side.
+
+#### Limitations
+
+- Heuristics are pattern-based and can both miss obfuscated attacks (e.g. instructions encoded in a way no rule matches) and flag legitimate tools that happen to mention sensitive-sounding terms.
+- Rug-pull pinning is scoped to a single browser's `localStorage` — it is a convenience check for this tool, not a substitute for server-side tool allowlisting/pinning in a production MCP client.
+
+### 10 — Compare two servers
 
 Click **⚡ Compare Two Servers** at the bottom of the sidebar to enter Compare Mode.  
 Both servers are scored independently and the results appear in the Quality Metrics card for easy side-by-side comparison.
@@ -319,7 +352,7 @@ Below those are descriptive statistics:
 
 The count on the right of each row is the number of items in that group.
 
-### 10 — Protocol Messages
+### 11 — Protocol Messages
 
 After connecting (and during subsequent interactions), a **Protocol Messages** card appears at the bottom of the results area. It shows a cumulative, real-time history of every MCP JSON-RPC call made during the session — useful for debugging, auditing, and understanding exactly what an AI agent sends and receives.
 
@@ -414,6 +447,7 @@ mcp-tester/
 | `POST` | `/api/resources/read` | Reads a resource by URI |
 | `POST` | `/api/prompts/get` | Gets a rendered prompt with supplied arguments |
 | `POST` | `/api/count-tokens` | Calls Claude API to count tokens accurately |
+| `POST` | `/api/security-scan` | Calls Claude API for a semantic tool-poisoning risk assessment |
 | `POST` | `/api/oauth/start` | Starts an SSO flow (discovery + registration + PKCE) |
 | `GET`  | `/oauth/callback` | Receives the OAuth authorization code |
 | `GET`  | `/api/oauth/status/{state}` | Polls for the SSO token |
