@@ -453,12 +453,14 @@ details summary::-webkit-details-marker { display: none; }
 .poison-finding.sev-high   { border-color: rgba(248,81,73,0.35);  background: rgba(248,81,73,0.06); }
 .poison-finding.sev-medium { border-color: rgba(227,112,10,0.35); background: rgba(227,112,10,0.06); }
 .poison-finding.sev-low    { border-color: rgba(210,180,50,0.35); background: rgba(210,180,50,0.06); }
+.poison-finding.sev-info   { border-color: var(--border); background: rgba(88,166,255,0.05); }
 .poison-finding-head { display: flex; align-items: center; gap: 6px; margin-bottom: 3px; }
 .poison-sev-tag { font-size: 9px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.03em;
   padding: 1px 6px; border-radius: 999px; }
 .sev-high   .poison-sev-tag { background: rgba(248,81,73,0.18);  color: #ff9492; }
 .sev-medium .poison-sev-tag { background: rgba(227,112,10,0.18); color: #ffb066; }
 .sev-low    .poison-sev-tag { background: rgba(210,180,50,0.18); color: #e3d24a; }
+.sev-info   .poison-sev-tag { background: rgba(88,166,255,0.15); color: var(--accent); }
 .poison-tool-name { font-weight: 600; color: var(--text); }
 .poison-category { color: var(--text-dim); font-size: 11px; margin-left: auto; }
 .poison-detail { color: var(--text-muted); }
@@ -2538,11 +2540,16 @@ const POISON_PATTERNS = [
   ['high', 'exfiltration', /\.aws[\/\\]credentials|aws_secret_access_key/i, 'References AWS credential files'],
   ['high', 'exfiltration', /\benv(ironment)?\s+variables?\b[\s\S]{0,40}\b(send|post|upload|exfiltrate|leak)\b/i, 'Requests exfiltration of environment variables'],
   ['high', 'exfiltration', /\b(send|post|upload|forward)\b[\s\S]{0,40}\bto\b[\s\S]{0,10}https?:\/\//i, 'Requests sending data to an external URL'],
+  ['high', 'exfiltration', /\b(bcc|cc|forward|copy|send|reply)\b[\s\S]{0,40}[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/i, 'Requests sending/forwarding data to an email address'],
   ['medium', 'hidden-content', /<!\x2d\x2d[\s\S]*?\x2d\x2d>/, 'Contains an HTML/Markdown comment that may render invisibly'],
 ];
 
-// BMP zero-width / bidi-control characters, plus variation selectors.
-const INVISIBLE_CHAR_RE = /[\u200b\u200c\u200d\u2060\ufeff\u202a-\u202e\u2066-\u2069\ufe00-\ufe0f]/u;
+// BMP zero-width / bidi-control characters, plus variation selectors \u2014 EXCLUDING U+FE0F
+// (VARIATION SELECTOR-16, "emoji presentation selector"). FE0F is extremely common in
+// legitimate tool descriptions (\u26a0\ufe0f \u2705 \u274c \ud83d\udd12 etc. are <base char>+FE0F) and flagging it produced
+// false positives (e.g. AWS's official run_script tool). U+FE00-FE0E (VS1-15, mostly used for
+// CJK ideograph/Mongolian variants) are far rarer in ordinary text and stay flagged.
+const INVISIBLE_CHAR_RE = /[\u200b\u200c\u200d\u2060\ufeff\u202a-\u202e\u2066-\u2069\ufe00-\ufe0e]/u;
 // Unicode Tag block (U+E0000\u2013U+E007F, astral \u2014 needs the /u flag): can encode arbitrary
 // hidden ASCII text ("ASCII smuggling"), a known technique for invisible LLM prompt injection.
 const TAG_CHAR_RE = /[\u{E0000}-\u{E007F}]/u;
@@ -2606,14 +2613,35 @@ function _scanTextForPoisoning(text) {
 
   findings.push(..._scanEncodedBlob(text));
 
-  const authorityMatches = text.match(AUTHORITY_WORDS_RE);
-  if (authorityMatches && authorityMatches.length >= 3) {
-    findings.push({ severity: 'medium', category: 'authority-language',
-      detail: `Unusually forceful/imperative language (${[...new Set(authorityMatches)].join(', ')})`,
-      snippet: _poisonSnippet(text, text.search(AUTHORITY_WORDS_RE), 10) });
-  }
-
   return findings;
+}
+
+// Categories confident enough to treat forceful wording as *corroborating* an attack rather
+// than being the attack itself. Deliberately excludes 'encoded-blob' and 'hidden-content',
+// which are lower-confidence signals on their own and shouldn't compound into a bigger one.
+const AUTHORITY_CORROBORATING_CATEGORIES = new Set(['prompt-injection', 'exfiltration', 'hidden-unicode']);
+
+// MUST/ALWAYS/NEVER/etc. are extremely common in legitimate API/parameter docs ("value MUST be
+// a valid email address") — flagging the wording alone false-positived on real servers (Google,
+// AWS). What actually matters is what the imperative is instructing, so this only escalates to
+// a scored finding when it co-occurs (anywhere in the same tool) with another, higher-confidence
+// signal; standalone it's reported as an unscored 'info' note for awareness only.
+function _scanAuthorityLanguage(text, hasCorroboratingSignal) {
+  if (!text) return [];
+  const authorityMatches = text.match(AUTHORITY_WORDS_RE);
+  if (!authorityMatches || authorityMatches.length < 3) return [];
+
+  const words = [...new Set(authorityMatches)].join(', ');
+  const snippet = _poisonSnippet(text, text.search(AUTHORITY_WORDS_RE), 10);
+
+  if (hasCorroboratingSignal) {
+    return [{ severity: 'medium', category: 'authority-language',
+      detail: `Unusually forceful/imperative language (${words}) alongside other suspicious content — may be reinforcing an injection attempt`,
+      snippet }];
+  }
+  return [{ severity: 'info', category: 'authority-language',
+    detail: `Forceful/imperative language (${words}) — commonly legitimate (spec/validation wording); shown for awareness only, not scored`,
+    snippet }];
 }
 
 // Deterministic key-sorted JSON so semantically identical objects always serialize the
@@ -2682,16 +2710,22 @@ async function scanToolPoisoning(tools, serverUrl) {
   tools.forEach(t => {
     let schemaText = '';
     try { schemaText = JSON.stringify(t.inputSchema || {}); } catch { /* ignore */ }
-    [
-      ..._scanTextForPoisoning(t.name || ''),
-      ..._scanTextForPoisoning(t.description || ''),
-      ..._scanTextForPoisoning(schemaText),
-    ].forEach(f => findings.push({ ...f, tool: t.name }));
+    const texts = [t.name || '', t.description || '', schemaText];
+
+    // Authority-language is evaluated per-tool (across name+description+schema together, not
+    // just the single field it appears in) so a corroborating signal split across fields — e.g.
+    // "MUST" in the description and an email-exfil pattern inside a param description — still
+    // counts as co-occurring.
+    const otherFindings = texts.flatMap(txt => _scanTextForPoisoning(txt));
+    const hasCorroboratingSignal = otherFindings.some(f => AUTHORITY_CORROBORATING_CATEGORIES.has(f.category));
+    const authorityFindings = texts.flatMap(txt => _scanAuthorityLanguage(txt, hasCorroboratingSignal));
+
+    [...otherFindings, ...authorityFindings].forEach(f => findings.push({ ...f, tool: t.name }));
   });
 
   findings.push(...await checkRugPull(tools, serverUrl));
 
-  const sevScore = { high: 30, medium: 12, low: 5 };
+  const sevScore = { high: 30, medium: 12, low: 5, info: 0 };
   const deduction = findings.reduce((sum, f) => sum + (sevScore[f.severity] || 0), 0);
   const overall = Math.max(0, 100 - deduction);
 
@@ -2735,14 +2769,15 @@ async function loadPoisoningCard(tools, serverUrl) {
 function renderPoisoningCardBody(s) {
   const g = poisonGrade(s.overall);
 
-  const order = { high: 0, medium: 1, low: 2 };
+  const order = { high: 0, medium: 1, low: 2, info: 3 };
   const sorted = [...s.findings].sort((a, b) => order[a.severity] - order[b.severity]);
 
   const findingsHtml = sorted.map(f => {
     // Whitelist severity into a fixed literal before using it in an HTML attribute —
-    // f.severity only ever comes from our own fixed 'high'|'medium'|'low' literals today,
-    // but this keeps the attribute context safe even if that invariant is ever broken.
-    const sevClass = f.severity === 'high' ? 'high' : f.severity === 'medium' ? 'medium' : 'low';
+    // f.severity only ever comes from our own fixed 'high'|'medium'|'low'|'info' literals
+    // today, but this keeps the attribute context safe even if that invariant is ever broken.
+    const sevClass = f.severity === 'high' ? 'high' : f.severity === 'medium' ? 'medium'
+      : f.severity === 'low' ? 'low' : 'info';
     return `
     <div class="poison-finding sev-${sevClass}">
       <div class="poison-finding-head">
