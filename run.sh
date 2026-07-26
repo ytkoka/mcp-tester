@@ -9,8 +9,10 @@ if ! [[ "${PORT}" =~ ^[0-9]+$ ]]; then
 fi
 URL="http://localhost:${PORT}"
 
-# Start the server in the background
-.venv/bin/python main.py &
+# Start the server in the background. Invoked directly via uvicorn (not `python main.py`,
+# i.e. not main.run()) so --reload is enabled here for local development, independent of
+# main.run()'s reload=False (that's the pip-installed end-user entry point).
+.venv/bin/python -m uvicorn main:app --reload --host 127.0.0.1 --port "$PORT" &
 SERVER_PID=$!
 trap 'kill $SERVER_PID 2>/dev/null' EXIT INT TERM
 

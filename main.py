@@ -1369,9 +1369,13 @@ async def index():
 
 
 def run():
+    # reload=False: run() is the pip-installed end-user entry point (mcp-tester /
+    # remote-mcp-server-tester), where watchfiles has no source tree worth watching and just
+    # spams "change detected" against site-packages. For local development, use ./run.sh or
+    # `uvicorn main:app --reload` instead.
     import uvicorn
     port = int(os.environ.get("PORT", 8080))
-    uvicorn.run("main:app", host="127.0.0.1", port=port, reload=True)
+    uvicorn.run("main:app", host="127.0.0.1", port=port, reload=False)
 
 
 if __name__ == "__main__":

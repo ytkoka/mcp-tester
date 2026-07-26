@@ -1,4 +1,4 @@
-# MCP Server Tester
+# Remote MCP Server Tester
 
 A web-based tool for inspecting [Model Context Protocol (MCP)](https://modelcontextprotocol.io) servers.  
 Connect to any MCP server, browse its **Tools, Resources, and Prompts**, measure fetch latency, estimate token usage, **score the quality of tool definitions**, and **compare two servers side by side**.
@@ -491,8 +491,9 @@ mcp-tester/
 
 ## Development
 
-The server runs with hot-reload enabled by default (`uvicorn --reload`).  
-Edit `main.py` or `static/index.html` and the changes take effect immediately.
+`./run.sh` runs the server with hot-reload enabled (`uvicorn --reload`) — edit `main.py` or `static/index.html` and the changes take effect immediately.
+
+Hot-reload is a development convenience, not something the distributed package does: the `mcp-tester` / `remote-mcp-server-tester` console scripts (installed via `pip install remote-mcp-server-tester`) run with reload disabled, since there's no source tree to watch in an installed environment and `watchfiles` would otherwise just spam "change detected" against `site-packages`.
 
 ```bash
 # Run on a different port
