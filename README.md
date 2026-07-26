@@ -40,7 +40,23 @@ Connect to any MCP server, browse its **Tools, Resources, and Prompts**, measure
 
 ## Installation
 
-### Using uv (recommended)
+### From PyPI
+
+```bash
+pip install remote-mcp-server-tester
+```
+
+To also enable the OpenAI GPT-4o / GPT-4 token counting providers (via `tiktoken`):
+
+```bash
+pip install remote-mcp-server-tester[openai]
+```
+
+This installs two equivalent console script commands — `remote-mcp-server-tester` (full name) and `mcp-tester` (short alias) — see [Quick Start](#quick-start).
+
+### From source (for development)
+
+#### Using uv (recommended)
 
 ```bash
 git clone https://github.com/ytkoka/mcp-tester.git
@@ -53,7 +69,7 @@ uv pip install \
   "httpx>=0.25.0"
 ```
 
-### Using pip
+#### Using pip
 
 ```bash
 git clone https://github.com/ytkoka/mcp-tester.git
@@ -67,7 +83,7 @@ pip install \
   "httpx>=0.25.0"
 ```
 
-### Optional: OpenAI token counting (tiktoken)
+#### Optional: OpenAI token counting (tiktoken)
 
 To enable the **OpenAI GPT-4o / GPT-4** token counting providers, install `tiktoken`:
 
@@ -84,6 +100,22 @@ Without it, the OpenAI providers return an error message and the other providers
 ---
 
 ## Quick Start
+
+### If installed via pip
+
+```bash
+mcp-tester
+```
+
+or, using the full package name:
+
+```bash
+remote-mcp-server-tester
+```
+
+Both commands are equivalent — `mcp-tester` is just a shorter alias.
+
+### If running from source
 
 ```bash
 ./run.sh

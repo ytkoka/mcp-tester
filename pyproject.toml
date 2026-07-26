@@ -1,8 +1,18 @@
 [project]
-name = "mcp-tester"
+name = "remote-mcp-server-tester"
 version = "0.1.0"
 description = "MCP Server Tool Inspector - connect, list tools, estimate token usage"
+readme = "README.md"
 requires-python = ">=3.11"
+license = { text = "MIT" }
+authors = [{ name = "Yutaka Oka" }]
+keywords = ["mcp", "model-context-protocol", "claude", "llm", "security", "tool-poisoning", "inspector"]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Topic :: Software Development :: Testing",
+]
 dependencies = [
     "mcp>=1.0.0",
     "fastapi>=0.100.0",
@@ -13,8 +23,16 @@ dependencies = [
 [project.optional-dependencies]
 openai = ["tiktoken>=0.7.0"]
 
+[project.urls]
+Homepage = "https://github.com/ytkoka/mcp-tester"
+Repository = "https://github.com/ytkoka/mcp-tester"
+
 [project.scripts]
+remote-mcp-server-tester = "main:run"
 mcp-tester = "main:run"
+
+[tool.hatch.build.targets.wheel]
+include = ["main.py", "static/**"]
 
 [build-system]
 requires = ["hatchling"]
