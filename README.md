@@ -135,6 +135,18 @@ Open **http://localhost:8080** in your browser.
 |----------|---------|-------------|
 | `PORT`   | `8080`  | Port the server listens on |
 
+### Public / demo hosting
+
+By default, all features are enabled and the tool connects to any URL you enter — ideal for local use, including testing MCP servers on `localhost`. **Most users running locally can ignore this section.**
+
+When hosting a public demo, set a single environment variable to enable safe defaults:
+
+| Variable | Effect |
+|----------|--------|
+| `MCP_TESTER_DEMO_MODE=true` | Blocks requests to private/internal addresses (SSRF protection) and disables Claude-API features (deep scan, Claude token counting). Heuristic checks and other providers still work. |
+
+For finer control, `MCP_TESTER_BLOCK_PRIVATE_IPS` and `MCP_TESTER_DISABLE_CLAUDE_API` can be set individually.
+
 ---
 
 ## Usage

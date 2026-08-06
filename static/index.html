@@ -986,6 +986,28 @@ document.getElementById('api-key').addEventListener('input', e => {
 const _savedKey = sessionStorage.getItem('claude-api-key');
 if (_savedKey) document.getElementById('api-key').value = _savedKey;
 
+// ── Server feature flags (e.g. demo deployments with Claude API disabled) ──
+let claudeApiDisabled = false;
+async function applyServerFeatureFlags() {
+  try {
+    const cfg = await fetch('/api/config').then(r => r.json());
+    claudeApiDisabled = cfg.claude_api_disabled === true;
+  } catch {
+    return; // network hiccup — leave Claude-mode UI as-is rather than guess
+  }
+  if (!claudeApiDisabled) return;
+
+  const providerSel = document.getElementById('token-provider');
+  const claudeOpt = providerSel?.querySelector('option[value="claude"]');
+  if (claudeOpt) claudeOpt.remove();
+  if (providerSel && providerSel.value === 'claude') {
+    providerSel.value = 'generic';
+    onProviderChange();
+  }
+  document.getElementById('api-settings').style.display = 'none';
+}
+applyServerFeatureFlags();
+
 // ── History ──────────────────────────────────────────────────────
 function loadHistory() {
   try {
@@ -2807,7 +2829,9 @@ function renderPoisoningCardBody(s) {
     <div class="poison-llm-row">
       <span style="font-size:11px;color:var(--text-dim)">Heuristics catch known patterns only — for a deeper semantic check:</span>
       <span style="display:flex;align-items:center;gap:8px">
-        <button class="btn-count" id="poison-llm-btn" onclick="runLLMSecurityScan()">Deep scan with Claude API</button>
+        ${claudeApiDisabled
+          ? `<button class="btn-count" disabled title="${escHtml('Deep scan is disabled on this deployment. Heuristic detection above still runs.')}">Deep scan with Claude API (disabled)</button>`
+          : `<button class="btn-count" id="poison-llm-btn" onclick="runLLMSecurityScan()">Deep scan with Claude API</button>`}
         <span id="poison-llm-status" style="font-size:11px"></span>
       </span>
     </div>

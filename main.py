@@ -40,6 +40,16 @@ app = FastAPI(title="MCP Server Tester")
 STATIC_DIR = Path(__file__).parent / "static"
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
+
+@app.get("/api/config")
+async def get_config():
+    """Lets the frontend adapt its UI to server-side feature flags (e.g. hide
+    Claude-API-backed controls when MCP_TESTER_DEMO_MODE /
+    MCP_TESTER_DISABLE_CLAUDE_API disable them) without duplicating the env
+    var logic in JS."""
+    return {"claude_api_disabled": _claude_api_disabled()}
+
+
 # ── SSO / OAuth state store ───────────────────────────────────────
 _oauth_pending: dict[str, dict] = {}
 _OAUTH_TTL = 600  # 10 minutes
@@ -588,6 +598,25 @@ async def connect_and_list_primitives(url: str, headers: dict, transport: str) -
         )
 
 
+# ── Demo mode / feature flags ────────────────────────────────────
+
+_TRUTHY_ENV_VALUES = ("1", "true", "yes", "on")
+
+
+def _env_flag(name: str) -> bool:
+    return os.environ.get(name, "").strip().lower() in _TRUTHY_ENV_VALUES
+
+
+def _demo_mode_enabled() -> bool:
+    """MCP_TESTER_DEMO_MODE is the umbrella switch for public/shared deployments
+    (e.g. a Hugging Face Space): it turns on every individual hardening flag
+    below via OR, so a single env var is enough to lock down a public demo.
+    The individual flags remain available to opt into one protection without
+    the other.
+    """
+    return _env_flag("MCP_TESTER_DEMO_MODE")
+
+
 # ── SSO helpers ──────────────────────────────────────────────────
 
 _BLOCKED_NETWORKS = (
@@ -603,9 +632,9 @@ _BLOCKED_NETWORKS = (
 
 
 def _block_private_ips_enabled() -> bool:
-    """MCP_TESTER_BLOCK_PRIVATE_IPS controls whether outbound URLs (MCP server
-    connections, OAuth discovery/token endpoints, etc.) may target private/
-    loopback/link-local addresses.
+    """MCP_TESTER_DEMO_MODE or MCP_TESTER_BLOCK_PRIVATE_IPS controls whether
+    outbound URLs (MCP server connections, OAuth discovery/token endpoints,
+    etc.) may target private/loopback/link-local addresses.
 
     Unset/false (default): local single-user use — allow localhost / internal
     IPs so developers can point the tester at MCP servers they're running
@@ -613,7 +642,17 @@ def _block_private_ips_enabled() -> bool:
     true: public/shared deployment (e.g. Hugging Face Space) — reject them to
     prevent SSRF against the host's internal network / cloud metadata.
     """
-    return os.environ.get("MCP_TESTER_BLOCK_PRIVATE_IPS", "").strip().lower() in ("1", "true", "yes", "on")
+    return _demo_mode_enabled() or _env_flag("MCP_TESTER_BLOCK_PRIVATE_IPS")
+
+
+def _claude_api_disabled() -> bool:
+    """MCP_TESTER_DEMO_MODE or MCP_TESTER_DISABLE_CLAUDE_API controls whether
+    the server is allowed to call api.anthropic.com (Claude-mode token
+    counting, Deep scan). Used to avoid burning an operator's API key on a
+    public demo deployment. Generic/OpenAI(tiktoken) token counting and the
+    heuristic tool-poisoning scan are local-only and unaffected either way.
+    """
+    return _demo_mode_enabled() or _env_flag("MCP_TESTER_DISABLE_CLAUDE_API")
 
 
 async def _assert_safe_url(url: str) -> None:
@@ -1021,6 +1060,19 @@ async def count_tokens_api(req: CountTokensRequest):
         }
 
     # provider == "claude" (default)
+    if _claude_api_disabled():
+        return JSONResponse(
+            status_code=403,
+            content={
+                "success": False,
+                "error": (
+                    "このデプロイでは Claude API を使ったトークンカウントが無効化されています。"
+                    "Generic または OpenAI (tiktoken) モードをご利用ください。"
+                ),
+                "error_type": "ClaudeAPIDisabled",
+            },
+        )
+
     claude_tools = [
         {
             "name": t.get("name", ""),
@@ -1205,6 +1257,18 @@ def _validate_scan_findings(raw: Any, known_tool_names: set[str]) -> list[dict] 
 @app.post("/api/security-scan")
 async def security_scan_api(req: SecurityScanRequest):
     """Ask Claude to semantically assess MCP tool definitions for tool-poisoning risk."""
+    if _claude_api_disabled():
+        return JSONResponse(
+            status_code=403,
+            content={
+                "success": False,
+                "error": (
+                    "このデプロイでは Deep scan (Claude API) が無効化されています。"
+                    "ヒューリスティック検出は引き続きご利用いただけます。"
+                ),
+                "error_type": "ClaudeAPIDisabled",
+            },
+        )
     if not req.api_key:
         return JSONResponse(status_code=400, content={"success": False, "error": "Missing api_key"})
     if req.model not in _ALLOWED_SECURITY_SCAN_MODELS:
