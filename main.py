@@ -152,6 +152,7 @@ def _count_tokens_tiktoken(tools: list[dict], encoding_name: str) -> dict:
 
 
 async def fetch_oauth_token(auth: AuthConfig) -> tuple[str, int | None]:
+    await _assert_safe_url(auth.oauth_token_url or "")
     async with httpx.AsyncClient() as client:
         data: dict[str, str] = {
             "grant_type": "client_credentials",
@@ -469,6 +470,7 @@ async def _exec_sse(url: str, headers: dict, tool_name: str, tool_args: dict) ->
 
 
 async def call_tool_on_server(url: str, headers: dict, transport: str, tool_name: str, tool_args: dict) -> tuple[Any, str]:
+    await _assert_safe_url(url)
     timeout = 60.0
     if transport == "streamable_http":
         return await asyncio.wait_for(_exec_streamable(url, headers, tool_name, tool_args), timeout), "streamable_http"
@@ -502,6 +504,7 @@ async def _exec_read_resource_sse(url: str, headers: dict, resource_uri: str) ->
 
 
 async def call_read_resource_on_server(url: str, headers: dict, transport: str, resource_uri: str) -> tuple[Any, str]:
+    await _assert_safe_url(url)
     timeout = 30.0
     if transport == "streamable_http":
         return await asyncio.wait_for(_exec_read_resource_streamable(url, headers, resource_uri), timeout), "streamable_http"
@@ -535,6 +538,7 @@ async def _exec_get_prompt_sse(url: str, headers: dict, prompt_name: str, prompt
 
 
 async def call_get_prompt_on_server(url: str, headers: dict, transport: str, prompt_name: str, prompt_args: dict) -> tuple[Any, str]:
+    await _assert_safe_url(url)
     timeout = 30.0
     if transport == "streamable_http":
         return await asyncio.wait_for(_exec_get_prompt_streamable(url, headers, prompt_name, prompt_args), timeout), "streamable_http"
@@ -554,6 +558,7 @@ async def call_get_prompt_on_server(url: str, headers: dict, transport: str, pro
 
 
 async def connect_and_list_primitives(url: str, headers: dict, transport: str) -> tuple[list, list, list, dict, str, dict, list]:
+    await _assert_safe_url(url)
     timeout = 30.0
 
     if transport == "streamable_http":
@@ -597,28 +602,57 @@ _BLOCKED_NETWORKS = (
 )
 
 
-def _assert_safe_discovery_url(url: str) -> None:
-    """Raise ValueError if the URL targets a private/reserved IP or uses a non-http(s) scheme.
-    Defends against SSRF when following attacker-controlled redirect chains in OAuth discovery."""
+def _block_private_ips_enabled() -> bool:
+    """MCP_TESTER_BLOCK_PRIVATE_IPS controls whether outbound URLs (MCP server
+    connections, OAuth discovery/token endpoints, etc.) may target private/
+    loopback/link-local addresses.
+
+    Unset/false (default): local single-user use — allow localhost / internal
+    IPs so developers can point the tester at MCP servers they're running
+    locally.
+    true: public/shared deployment (e.g. Hugging Face Space) — reject them to
+    prevent SSRF against the host's internal network / cloud metadata.
+    """
+    return os.environ.get("MCP_TESTER_BLOCK_PRIVATE_IPS", "").strip().lower() in ("1", "true", "yes", "on")
+
+
+async def _assert_safe_url(url: str) -> None:
+    """Raise ValueError if url uses a disallowed scheme, or — when
+    MCP_TESTER_BLOCK_PRIVATE_IPS is enabled — resolves via DNS to a private/
+    reserved/loopback/link-local address. Defends against SSRF from
+    user-supplied MCP server URLs and OAuth discovery/registration/token
+    endpoints (including attacker-controlled redirect chains).
+
+    DNS rebinding note: the IP(s) checked here are resolved at validation
+    time; the actual connection is resolved separately afterwards by
+    httpx/the MCP SDK, so a name that re-resolves between the two lookups is
+    not covered. Pinning the validated IP through to the connection is a
+    known follow-up, out of scope for this pass.
+    """
     parsed = urlparse(url)
     if parsed.scheme not in ("http", "https"):
         raise ValueError(f"Disallowed URL scheme: {parsed.scheme!r}")
+
+    if not _block_private_ips_enabled():
+        return
+
     host = parsed.hostname or ""
     if not host:
         raise ValueError("URL is missing a hostname")
+
+    loop = asyncio.get_running_loop()
     try:
-        ip = ipaddress.ip_address(host)
-    except ValueError:
-        return  # domain name literal — allow without DNS resolution
-    if any(ip in net for net in _BLOCKED_NETWORKS):
-        raise ValueError(f"URL targets a private/reserved address: {ip}")
+        infos = await loop.getaddrinfo(host, None)
+    except OSError as e:
+        raise ValueError(f"Could not resolve host {host!r}: {e}") from e
 
-
-def _assert_http_scheme(url: str) -> None:
-    """Raise ValueError if the URL scheme is not http or https (e.g. javascript:, file:)."""
-    scheme = urlparse(url).scheme
-    if scheme not in ("http", "https"):
-        raise ValueError(f"Disallowed URL scheme: {scheme!r}")
+    for info in infos:
+        addr = info[4][0]
+        if "%" in addr:  # strip IPv6 zone id (e.g. fe80::1%eth0)
+            addr = addr.split("%", 1)[0]
+        ip = ipaddress.ip_address(addr)
+        if any(ip in net for net in _BLOCKED_NETWORKS):
+            raise ValueError(f"URL host {host!r} resolves to a private/reserved address: {ip}")
 
 
 async def _discover_oauth_full(url: str) -> dict:
@@ -642,6 +676,8 @@ async def _discover_oauth_full(url: str) -> dict:
     Returns dict with found, authorization_endpoint, token_endpoint,
     registration_endpoint, issuer, scopes_supported.
     """
+    await _assert_safe_url(url)
+
     parsed = urlparse(url)
     base = f"{parsed.scheme}://{parsed.netloc}"
     fallback: dict | None = None
@@ -700,14 +736,14 @@ async def _discover_oauth_full(url: str) -> dict:
                         resource_meta_url or "not found in WWW-Authenticate",
                     )
                     if resource_meta_url:
-                        _assert_safe_discovery_url(resource_meta_url)
+                        await _assert_safe_url(resource_meta_url)
                         meta_resp = await client.get(resource_meta_url)
                         if meta_resp.status_code == 200:
                             as_urls = meta_resp.json().get("authorization_servers", [])
                             logger.info("[oauth-discover] Step3: authorization_servers: %s", as_urls)
                             if as_urls:
                                 as_well_known = f"{as_urls[0]}/.well-known/oauth-authorization-server"
-                                _assert_safe_discovery_url(as_urls[0])
+                                await _assert_safe_url(as_urls[0])
                                 as_resp = await client.get(as_well_known)
                                 scopes = (
                                     as_resp.json().get("scopes_supported", [])
@@ -734,6 +770,7 @@ async def _discover_oauth_full(url: str) -> dict:
 
 async def _dynamic_register(registration_endpoint: str, redirect_uri: str) -> dict:
     """RFC 7591 Dynamic Client Registration — returns {client_id, client_secret?, ...}"""
+    await _assert_safe_url(registration_endpoint)
     async with httpx.AsyncClient() as client:
         resp = await client.post(
             registration_endpoint,
@@ -769,111 +806,115 @@ class DiscoverRequest(BaseModel):
 
 @app.post("/api/oauth/start")
 async def oauth_start(req: OAuthStartRequest):
-    _cleanup_oauth()
+    try:
+        _cleanup_oauth()
 
-    auth_endpoint = req.auth_endpoint.strip()
-    token_endpoint = req.token_endpoint.strip()
-    client_id = req.client_id.strip()
-    client_secret = req.client_secret.strip()
-    discovery_info: dict = {}
+        auth_endpoint = req.auth_endpoint.strip()
+        token_endpoint = req.token_endpoint.strip()
+        client_id = req.client_id.strip()
+        client_secret = req.client_secret.strip()
+        discovery_info: dict = {}
 
-    # ── Step 1: auto-discover OAuth config if any field is missing ──
-    if not auth_endpoint or not token_endpoint or not client_id:
-        discovery_info = await _discover_oauth_full(req.mcp_url)
-        if not discovery_info.get("found"):
+        # ── Step 1: auto-discover OAuth config if any field is missing ──
+        if not auth_endpoint or not token_endpoint or not client_id:
+            discovery_info = await _discover_oauth_full(req.mcp_url)
+            if not discovery_info.get("found"):
+                return JSONResponse(
+                    status_code=400,
+                    content={
+                        "success": False,
+                        "error": (
+                            "OAuth 設定を MCP サーバーから自動検出できませんでした。\n"
+                            "詳細設定で Authorization URL・Token Endpoint・Client ID を入力してください。"
+                        ),
+                        "needs_manual": True,
+                    },
+                )
+            auth_endpoint = auth_endpoint or discovery_info.get("authorization_endpoint", "")
+            token_endpoint = token_endpoint or discovery_info.get("token_endpoint", "")
+
+        # ── Step 2: Dynamic Client Registration if client_id is still missing ──
+        if not client_id:
+            reg_ep = discovery_info.get("registration_endpoint")
+            if not reg_ep:
+                return JSONResponse(
+                    status_code=400,
+                    content={
+                        "success": False,
+                        "error": (
+                            "サーバーが Dynamic Client Registration (RFC 7591) をサポートしていません。\n"
+                            "詳細設定で Client ID を入力してください。"
+                        ),
+                        "needs_client_id": True,
+                    },
+                )
+            try:
+                reg = await _dynamic_register(reg_ep, req.redirect_uri)
+            except Exception as e:
+                return JSONResponse(
+                    status_code=400,
+                    content={
+                        "success": False,
+                        "error": f"Dynamic Client Registration に失敗しました: {e}\n詳細設定で Client ID を入力してください。",
+                        "needs_client_id": True,
+                    },
+                )
+            client_id = reg.get("client_id", "")
+            client_secret = reg.get("client_secret", client_secret)
+            logger.info("Dynamic registration succeeded: client_id=%s", client_id)
+
+        if not auth_endpoint or not token_endpoint or not client_id:
             return JSONResponse(
                 status_code=400,
-                content={
-                    "success": False,
-                    "error": (
-                        "OAuth 設定を MCP サーバーから自動検出できませんでした。\n"
-                        "詳細設定で Authorization URL・Token Endpoint・Client ID を入力してください。"
-                    ),
-                    "needs_manual": True,
-                },
+                content={"success": False, "error": "auth_endpoint / token_endpoint / client_id が取得できませんでした。"},
             )
-        auth_endpoint = auth_endpoint or discovery_info.get("authorization_endpoint", "")
-        token_endpoint = token_endpoint or discovery_info.get("token_endpoint", "")
 
-    # ── Step 2: Dynamic Client Registration if client_id is still missing ──
-    if not client_id:
-        reg_ep = discovery_info.get("registration_endpoint")
-        if not reg_ep:
-            return JSONResponse(
-                status_code=400,
-                content={
-                    "success": False,
-                    "error": (
-                        "サーバーが Dynamic Client Registration (RFC 7591) をサポートしていません。\n"
-                        "詳細設定で Client ID を入力してください。"
-                    ),
-                    "needs_client_id": True,
-                },
-            )
-        try:
-            reg = await _dynamic_register(reg_ep, req.redirect_uri)
-        except Exception as e:
-            return JSONResponse(
-                status_code=400,
-                content={
-                    "success": False,
-                    "error": f"Dynamic Client Registration に失敗しました: {e}\n詳細設定で Client ID を入力してください。",
-                    "needs_client_id": True,
-                },
-            )
-        client_id = reg.get("client_id", "")
-        client_secret = reg.get("client_secret", client_secret)
-        logger.info("Dynamic registration succeeded: client_id=%s", client_id)
+        await _assert_safe_url(auth_endpoint)
+        await _assert_safe_url(token_endpoint)
 
-    if not auth_endpoint or not token_endpoint or not client_id:
+        # ── Step 3: Build PKCE auth URL ──────────────────────────────
+        verifier, challenge = _pkce_pair()
+        state = secrets.token_urlsafe(16)
+
+        _oauth_pending[state] = {
+            "verifier": verifier,
+            "token_endpoint": token_endpoint,
+            "client_id": client_id,
+            "client_secret": client_secret,
+            "redirect_uri": req.redirect_uri,
+            "result": None,
+            "ts": time.time(),
+        }
+
+        params: dict[str, str] = {
+            "response_type": "code",
+            "client_id": client_id,
+            "redirect_uri": req.redirect_uri,
+            "state": state,
+            "code_challenge": challenge,
+            "code_challenge_method": "S256",
+        }
+        if req.scope:
+            params["scope"] = req.scope
+
+        auth_url = f"{auth_endpoint}?{urlencode(params)}"
+        return {
+            "success": True,
+            "state": state,
+            "auth_url": auth_url,
+            "client_id": client_id,
+            "issuer": discovery_info.get("issuer"),
+            "dynamic_registration": bool(discovery_info.get("registration_endpoint") and not req.client_id),
+            "authorization_endpoint": auth_endpoint,
+            "token_endpoint": token_endpoint,
+            "scopes_supported": discovery_info.get("scopes_supported", []),
+        }
+    except Exception as e:
+        logger.exception("OAuth start failed")
         return JSONResponse(
             status_code=400,
-            content={"success": False, "error": "auth_endpoint / token_endpoint / client_id が取得できませんでした。"},
+            content={"success": False, "error": str(e), "error_type": type(e).__name__},
         )
-
-    try:
-        _assert_http_scheme(auth_endpoint)
-        _assert_http_scheme(token_endpoint)
-    except ValueError as e:
-        return JSONResponse(status_code=400, content={"success": False, "error": str(e)})
-
-    # ── Step 3: Build PKCE auth URL ──────────────────────────────
-    verifier, challenge = _pkce_pair()
-    state = secrets.token_urlsafe(16)
-
-    _oauth_pending[state] = {
-        "verifier": verifier,
-        "token_endpoint": token_endpoint,
-        "client_id": client_id,
-        "client_secret": client_secret,
-        "redirect_uri": req.redirect_uri,
-        "result": None,
-        "ts": time.time(),
-    }
-
-    params: dict[str, str] = {
-        "response_type": "code",
-        "client_id": client_id,
-        "redirect_uri": req.redirect_uri,
-        "state": state,
-        "code_challenge": challenge,
-        "code_challenge_method": "S256",
-    }
-    if req.scope:
-        params["scope"] = req.scope
-
-    auth_url = f"{auth_endpoint}?{urlencode(params)}"
-    return {
-        "success": True,
-        "state": state,
-        "auth_url": auth_url,
-        "client_id": client_id,
-        "issuer": discovery_info.get("issuer"),
-        "dynamic_registration": bool(discovery_info.get("registration_endpoint") and not req.client_id),
-        "authorization_endpoint": auth_endpoint,
-        "token_endpoint": token_endpoint,
-        "scopes_supported": discovery_info.get("scopes_supported", []),
-    }
 
 
 @app.get("/oauth/callback")
@@ -940,10 +981,17 @@ async def oauth_status(state: str):
 
 @app.post("/api/oauth/discover")
 async def oauth_discover(req: DiscoverRequest):
-    result = await _discover_oauth_full(req.url)
-    if result.get("found"):
-        result["supports_dynamic_registration"] = bool(result.get("registration_endpoint"))
-    return result
+    try:
+        result = await _discover_oauth_full(req.url)
+        if result.get("found"):
+            result["supports_dynamic_registration"] = bool(result.get("registration_endpoint"))
+        return result
+    except Exception as e:
+        logger.exception("OAuth discover failed")
+        return JSONResponse(
+            status_code=400,
+            content={"success": False, "error": str(e), "error_type": type(e).__name__},
+        )
 
 
 class CountTokensRequest(BaseModel):
