@@ -1486,8 +1486,9 @@ def run():
     # spams "change detected" against site-packages. For local development, use ./run.sh or
     # `uvicorn main:app --reload` instead.
     import uvicorn
+    host = os.environ.get("HOST", "127.0.0.1")
     port = int(os.environ.get("PORT", 8080))
-    uvicorn.run("main:app", host="127.0.0.1", port=port, reload=False)
+    uvicorn.run("main:app", host=host, port=port, reload=False)
 
 
 if __name__ == "__main__":
