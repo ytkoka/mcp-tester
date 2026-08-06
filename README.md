@@ -3,6 +3,10 @@
 A web-based tool for inspecting [Model Context Protocol (MCP)](https://modelcontextprotocol.io) servers.  
 Connect to any MCP server, browse its **Tools, Resources, and Prompts**, measure fetch latency, estimate token usage, **score the quality of tool definitions**, and **compare two servers side by side**.
 
+> 🔗 **Live demo:** https://mcp-tester-gsei.onrender.com
+>
+> Hosted on Render's free tier — the first request after a period of inactivity may take ~50 seconds to wake the server. Claude-API features (deep scan, Claude token counting) are disabled in the demo; run it locally to use them.
+
 ---
 
 ![MCP Server Tester](mcp-server-tester.png)
