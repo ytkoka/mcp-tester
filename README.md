@@ -139,7 +139,7 @@ Open **http://localhost:8080** in your browser.
 
 By default, all features are enabled and the tool connects to any URL you enter — ideal for local use, including testing MCP servers on `localhost`. **Most users running locally can ignore this section.**
 
-When hosting a public demo (e.g. Hugging Face Spaces), set these two variables together:
+When hosting a public demo, set these two variables together:
 
 | Variable | Effect |
 |----------|--------|
