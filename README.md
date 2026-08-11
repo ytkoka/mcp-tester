@@ -9,7 +9,8 @@ Connect to any MCP server, browse its **Tools, Resources, and Prompts**, measure
 
 ---
 
-![MCP Server Tester](mcp-server-tester.png)
+![MCP Server Tester](mcp-server-tester2.png)
+Inspecting [bad-mcp (a deliberately malicious test server)](https://github.com/ytkoka/bad-mcp): ASCII smuggling, a rug-pull, and hidden prompt-injection are all flagged.
 
 ---
 
@@ -25,6 +26,7 @@ Connect to any MCP server, browse its **Tools, Resources, and Prompts**, measure
 | **Auth Inspector** | After connecting, shows the auth method used, headers sent, decoded access token claims (exp, iss, sub, scope), and OAuth endpoints; SSO access tokens are cached and reused until expiry |
 | **LLM Readiness Score** | Grades tool definitions A–F across 5 dimensions; highlights which tools need improvement |
 | **Tool Poisoning Risk** | Heuristic scan for MCP tool poisoning attacks (hidden Unicode, prompt-injection phrasing, credential-exfiltration hints, hidden HTML comments) plus "rug pull" detection (tool description/schema silently changed since last connect to the same server); optional deeper scan via the Claude API |
+| **Export report** | Download a self-contained Markdown or JSON report (server info, timing, scores, findings) with automatic secret redaction and a built-in disclaimer — generated entirely client-side |
 | **Compare Mode** | Connects to two servers in parallel and compares performance, tokens, quality scores, and documentation |
 | **Multiple auth methods** | None · Bearer Token · OAuth2 Client Credentials · SSO (Authorization Code + PKCE) · Custom Header |
 | **SSO auto-discovery** | Discovers OAuth endpoints from `/.well-known/oauth-authorization-server` and MCP `WWW-Authenticate` headers |
@@ -329,6 +331,8 @@ A tool's definition can legitimately change between releases — or a malicious 
 
 This is a local, per-browser pin — it resets if you clear site data, and only tracks servers you've connected to from this browser.
 
+**What a Rug Pull finding does *not* tell you:** the check only detects that a definition *changed* — it cannot tell a malicious rewrite from a legitimate update (e.g. a provider shipping a normal tool update). A trustworthy server can trigger this finding just by updating its tools. Treat it as a prompt to review what changed, not as proof of malicious intent.
+
 #### Deep scan with Claude API (optional)
 
 Heuristics only catch known patterns. Click **Deep scan with Claude API** (reuses the API key entered for [token counting](#6--token-counting)) to send tool definitions to Claude for a semantic risk assessment — useful for catching intent that doesn't match a fixed pattern (e.g. paraphrased instructions). The request is proxied through `/api/security-scan`; your API key is never stored server-side.
@@ -338,7 +342,7 @@ The tool definitions being analyzed are attacker-controlled text, so `/api/secur
 #### Limitations
 
 - Heuristics are pattern-based and can both miss obfuscated attacks (e.g. instructions encoded in a way no rule matches) and flag legitimate tools that happen to mention sensitive-sounding terms.
-- Rug-pull pinning is scoped to a single browser's `localStorage` — it is a convenience check for this tool, not a substitute for server-side tool allowlisting/pinning in a production MCP client.
+- Rug-pull pinning is scoped to a single browser's `localStorage` — it is a convenience check for this tool, not a substitute for server-side tool allowlisting/pinning in a production MCP client. It also only detects *that* a definition changed, not *why* — see [Rug pull detection](#rug-pull-detection) above.
 
 ### 10 — Compare two servers
 
@@ -372,7 +376,7 @@ The **Estimated Token Usage** bar chart visualises the token gap between the two
 
 **Quality Metrics card** — LLM Readiness Score and documentation richness side by side:
 
-The top rows show the heuristic quality score (see §7) computed for each server's tool set:
+The top rows show the heuristic quality score (see §8) computed for each server's tool set:
 
 | Row | What it measures | Better |
 |-----|-----------------|--------|
@@ -434,6 +438,25 @@ After connecting (and during subsequent interactions), a **Protocol Messages** c
 
 > **Note:** The `initialize` request body is reconstructed from MCP SDK constants (`LATEST_PROTOCOL_VERSION`, `DEFAULT_CLIENT_INFO`) and may not exactly match the wire-level bytes sent by the SDK. The `capabilities` field in particular shows a placeholder — actual capability negotiation depends on internal SDK callbacks that are not directly observable.
 
+### 12 — Export report
+
+After connecting, the **Server Info** card shows two buttons in its top-right corner: **📄 Markdown** and **🧾 JSON**. Both generate a self-contained snapshot of everything currently on screen for the connected server — server info, timing, Token Summary, LLM Readiness Score breakdown, and Tool Poisoning Risk findings (heuristic, plus Deep scan findings if you ran one).
+
+Generation happens entirely in the browser (no server round-trip) and downloads immediately as a file named `mcp-report-<server-name>-<YYYYMMDD>.md` / `.json`.
+
+#### What's redacted
+
+Reports are meant to be shared, so secrets are stripped before anything is written out:
+
+- Query-string parameters in the server URL whose name looks secret-shaped (`key`, `token`, `secret`, `apiKey`, `password`, `auth`, `credential`, …) have their value replaced with `***`.
+- Authentication is shown only as a method name (e.g. "Bearer Token", "SSO (PKCE)") — the actual token, API key, or header value is never included.
+
+#### Disclaimer
+
+Every report ends with a fixed disclaimer (Markdown: a `## Disclaimer` section; JSON: a top-level `disclaimer` field) noting that the report is a single point-in-time snapshot, that the security checks are heuristic (not a professional audit), and that the LLM Readiness Score is this tool's own heuristic, not an absolute judgment. It cannot be removed from the UI.
+
+> **Note:** Compare Mode reports (two servers side by side) aren't supported yet — export works from a single connected server.
+
 ---
 
 ## Auth Methods
@@ -493,11 +516,12 @@ mcp-tester/
 | Method | Path | Description |
 |--------|------|-------------|
 | `GET`  | `/` | Serves the UI |
+| `GET`  | `/api/config` | Exposes server-side feature flags (e.g. whether Claude-API features are disabled) so the UI can adapt |
 | `POST` | `/api/connect` | Connects and lists Tools, Resources, and Prompts |
 | `POST` | `/api/execute` | Calls a tool and returns its result |
 | `POST` | `/api/resources/read` | Reads a resource by URI |
 | `POST` | `/api/prompts/get` | Gets a rendered prompt with supplied arguments |
-| `POST` | `/api/count-tokens` | Calls Claude API to count tokens accurately |
+| `POST` | `/api/count-tokens` | Counts tokens — Generic and OpenAI(tiktoken) providers compute locally; the Claude provider calls the Claude API for an exact count |
 | `POST` | `/api/security-scan` | Calls Claude API for a semantic tool-poisoning risk assessment |
 | `POST` | `/api/oauth/start` | Starts an SSO flow (discovery + registration + PKCE) |
 | `GET`  | `/oauth/callback` | Receives the OAuth authorization code |

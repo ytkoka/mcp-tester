@@ -4,22 +4,70 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>MCP Server Tester</title>
+<script>
+// Applied synchronously (before CSS paints) to avoid a flash of the wrong theme.
+(function() {
+  var saved = localStorage.getItem('mcp-tester-theme');
+  var theme = saved || (matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark');
+  document.documentElement.setAttribute('data-theme', theme);
+})();
+</script>
 <style>
 :root {
   --bg: #0d1117;
   --surface: #161b22;
   --surface2: #21262d;
   --border: #30363d;
+  --border-hover: #444c56;
   --accent: #58a6ff;
   --accent-dim: #1f3a5f;
+  --accent-dim-hover: #2a4a7f;
+  --accent-hover: #79bfff;
+  --on-accent: #0d1117;
   --text: #c9d1d9;
   --text-muted: #8b949e;
   --text-dim: #6e7681;
   --success: #3fb950;
   --warning: #d29922;
+  --warning-strong: #e3700a;
+  --warning-text-medium: #ffb066;
+  --warning-text-low: #e3d24a;
   --error: #f85149;
+  --error-text: #ff9492;
+  --syntax-key: #79c0ff;
+  --syntax-string: #a5d6ff;
+  --syntax-bool: #ff7b72;
+  --syntax-number: #f2cc60;
   --radius: 8px;
   --radius-sm: 4px;
+  color-scheme: dark;
+}
+:root[data-theme="light"] {
+  --bg: #ffffff;
+  --surface: #f6f8fa;
+  --surface2: #eaeef2;
+  --border: #d0d7de;
+  --border-hover: #afb8c1;
+  --accent: #0969da;
+  --accent-dim: #ddf1ff;
+  --accent-dim-hover: #b6e3ff;
+  --accent-hover: #0860ca;
+  --on-accent: #ffffff;
+  --text: #1f2328;
+  --text-muted: #59636e;
+  --text-dim: #6e7781;
+  --success: #1a7f37;
+  --warning: #9a6700;
+  --warning-strong: #bc4c00;
+  --warning-text-medium: #953800;
+  --warning-text-low: #7d6600;
+  --error: #cf222e;
+  --error-text: #a40e26;
+  --syntax-key: #0550ae;
+  --syntax-string: #0a3069;
+  --syntax-bool: #cf222e;
+  --syntax-number: #953800;
+  color-scheme: light;
 }
 * { box-sizing: border-box; margin: 0; padding: 0; }
 body {
@@ -46,6 +94,14 @@ header .badge {
   background: var(--accent-dim); color: var(--accent);
   font-size: 11px; padding: 2px 8px; border-radius: 20px; border: 1px solid var(--accent);
 }
+.theme-toggle {
+  margin-left: auto; width: 30px; height: 30px; flex-shrink: 0;
+  display: flex; align-items: center; justify-content: center;
+  border-radius: 999px; border: 1px solid var(--border);
+  background: var(--surface2); color: var(--text-muted);
+  cursor: pointer; font-size: 14px; line-height: 1; transition: border-color 0.15s, color 0.15s;
+}
+.theme-toggle:hover { border-color: var(--accent); color: var(--accent); }
 .layout { display: flex; flex: 1; overflow: hidden; }
 .sidebar {
   width: 320px; flex-shrink: 0;
@@ -83,8 +139,8 @@ select option { background: var(--surface2); }
   font-size: 13px; font-weight: 600; cursor: pointer; border: none;
   transition: background 0.15s, opacity 0.15s;
 }
-.btn-primary { background: var(--accent); color: #0d1117; }
-.btn-primary:hover { background: #79bfff; }
+.btn-primary { background: var(--accent); color: var(--on-accent); }
+.btn-primary:hover { background: var(--accent-hover); }
 .btn-primary:disabled { opacity: 0.5; cursor: not-allowed; }
 .btn-sm {
   padding: 4px 10px; font-size: 11px; border-radius: var(--radius-sm);
@@ -98,7 +154,7 @@ select option { background: var(--surface2); }
   border: 1px solid rgba(88,166,255,0.4); background: var(--accent-dim);
   color: var(--accent); font-weight: 600; transition: all 0.15s;
 }
-.btn-count:hover { background: #2a4a7f; border-color: var(--accent); }
+.btn-count:hover { background: var(--accent-dim-hover); border-color: var(--accent); }
 .btn-count:disabled { opacity: 0.5; cursor: not-allowed; }
 
 /* Cards */
@@ -107,6 +163,9 @@ select option { background: var(--surface2); }
   font-size: 11px; color: var(--text-muted); text-transform: uppercase;
   letter-spacing: 0.06em; margin-bottom: 10px; font-weight: 600;
 }
+.card-header-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 10px; }
+.card-header-row .card-title { margin-bottom: 0; }
+.card-header-actions { display: flex; gap: 6px; flex-shrink: 0; }
 
 /* Stats */
 .stats-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; }
@@ -146,7 +205,7 @@ select option { background: var(--surface2); }
   background: var(--surface); border: 1px solid var(--border);
   border-radius: var(--radius); overflow: hidden; transition: border-color 0.15s;
 }
-.tool-card:hover { border-color: #444c56; }
+.tool-card:hover { border-color: var(--border-hover); }
 .tool-header {
   display: flex; align-items: center; gap: 10px; padding: 10px 14px;
   cursor: pointer; user-select: none;
@@ -175,7 +234,7 @@ select option { background: var(--surface2); }
 .schema-label { font-size: 11px; color: var(--text-dim); text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 6px; }
 .json-block {
   background: var(--bg); border: 1px solid var(--border); border-radius: var(--radius-sm);
-  padding: 10px; font-family: "SF Mono", "Fira Code", monospace; font-size: 11px; color: #a5d6ff;
+  padding: 10px; font-family: "SF Mono", "Fira Code", monospace; font-size: 11px; color: var(--syntax-string);
   overflow-x: auto; white-space: pre; max-height: 300px; overflow-y: auto; line-height: 1.6;
 }
 .tool-footer { display: flex; gap: 8px; margin-top: 10px; justify-content: flex-end; }
@@ -187,7 +246,7 @@ select option { background: var(--surface2); }
 
 /* Alert */
 .alert { padding: 10px 14px; border-radius: var(--radius); font-size: 13px; line-height: 1.5; display: flex; gap: 8px; align-items: flex-start; }
-.alert-error { background: rgba(248,81,73,0.1); border: 1px solid rgba(248,81,73,0.3); color: #ff9492; }
+.alert-error { background: rgba(248,81,73,0.1); border: 1px solid rgba(248,81,73,0.3); color: var(--error-text); }
 .alert pre { white-space: pre-wrap; font-family: monospace; font-size: 12px; color: inherit; }
 
 /* Spinner */
@@ -202,7 +261,7 @@ select option { background: var(--surface2); }
 #copy-toast {
   position: fixed; bottom: 24px; left: 50%;
   transform: translateX(-50%) translateY(20px);
-  background: var(--success); color: #0d1117;
+  background: var(--success); color: var(--on-accent);
   padding: 8px 18px; border-radius: 20px; font-size: 13px; font-weight: 600;
   opacity: 0; pointer-events: none; transition: opacity 0.2s, transform 0.2s; z-index: 100;
 }
@@ -296,7 +355,7 @@ details summary::-webkit-details-marker { display: none; }
   background: var(--surface); border: 1px solid var(--border);
   border-radius: var(--radius); overflow: hidden; transition: border-color 0.15s; margin-bottom: 8px;
 }
-.resource-card:hover { border-color: #444c56; }
+.resource-card:hover { border-color: var(--border-hover); }
 .resource-header { display: flex; align-items: center; gap: 10px; padding: 10px 14px; cursor: pointer; user-select: none; }
 .resource-header:hover { background: var(--surface2); }
 .resource-icon { font-size: 14px; flex-shrink: 0; }
@@ -316,7 +375,7 @@ details summary::-webkit-details-marker { display: none; }
   background: var(--surface); border: 1px solid var(--border);
   border-radius: var(--radius); overflow: hidden; transition: border-color 0.15s; margin-bottom: 8px;
 }
-.prompt-card:hover { border-color: #444c56; }
+.prompt-card:hover { border-color: var(--border-hover); }
 .prompt-header { display: flex; align-items: center; gap: 10px; padding: 10px 14px; cursor: pointer; user-select: none; }
 .prompt-header:hover { background: var(--surface2); }
 .prompt-icon { font-size: 14px; flex-shrink: 0; }
@@ -363,7 +422,7 @@ details summary::-webkit-details-marker { display: none; }
 .btn-run:hover { background: rgba(63,185,80,0.2); border-color: var(--success); }
 .btn-run:disabled { opacity: 0.5; cursor: not-allowed; }
 .btn-execute { border-color: rgba(88,166,255,0.3) !important; color: var(--accent) !important; background: var(--accent-dim) !important; }
-.btn-execute:hover { background: #2a4a7f !important; border-color: var(--accent) !important; }
+.btn-execute:hover { background: var(--accent-dim-hover) !important; border-color: var(--accent) !important; }
 .btn-execute.active { background: rgba(88,166,255,0.2) !important; }
 .exec-result { display: none; margin-top: 10px; }
 .exec-result.show { display: block; }
@@ -373,7 +432,7 @@ details summary::-webkit-details-marker { display: none; }
   color: var(--text); overflow-x: auto; white-space: pre-wrap; max-height: 400px;
   overflow-y: auto; line-height: 1.6;
 }
-.result-block.is-error { border-color: rgba(248,81,73,0.3); background: rgba(248,81,73,0.05); color: #ff9492; }
+.result-block.is-error { border-color: rgba(248,81,73,0.3); background: rgba(248,81,73,0.05); color: var(--error-text); }
 
 /* ── Compare mode ─────────────────────────────────────────────── */
 .btn-compare-toggle {
@@ -444,7 +503,7 @@ details summary::-webkit-details-marker { display: none; }
 .score-dim-wt  { font-size: 10px; color: var(--text-dim); width: 28px; text-align: right; flex-shrink: 0; }
 .score-warnings { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 12px; padding-top: 10px; border-top: 1px solid var(--border); }
 .score-warn-tag { font-size: 11px; padding: 3px 8px; border-radius: var(--radius-sm);
-  background: rgba(248,81,73,0.07); border: 1px solid rgba(248,81,73,0.22); color: #ff9492; }
+  background: rgba(248,81,73,0.07); border: 1px solid rgba(248,81,73,0.22); color: var(--error-text); }
 .score-grade-badge { font-size: 15px; font-weight: 800; margin-right: 3px; }
 
 /* ── Tool Poisoning Risk Card ─────────────────────────────────── */
@@ -457,9 +516,9 @@ details summary::-webkit-details-marker { display: none; }
 .poison-finding-head { display: flex; align-items: center; gap: 6px; margin-bottom: 3px; }
 .poison-sev-tag { font-size: 9px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.03em;
   padding: 1px 6px; border-radius: 999px; }
-.sev-high   .poison-sev-tag { background: rgba(248,81,73,0.18);  color: #ff9492; }
-.sev-medium .poison-sev-tag { background: rgba(227,112,10,0.18); color: #ffb066; }
-.sev-low    .poison-sev-tag { background: rgba(210,180,50,0.18); color: #e3d24a; }
+.sev-high   .poison-sev-tag { background: rgba(248,81,73,0.18);  color: var(--error-text); }
+.sev-medium .poison-sev-tag { background: rgba(227,112,10,0.18); color: var(--warning-text-medium); }
+.sev-low    .poison-sev-tag { background: rgba(210,180,50,0.18); color: var(--warning-text-low); }
 .sev-info   .poison-sev-tag { background: rgba(88,166,255,0.15); color: var(--accent); }
 .poison-tool-name { font-weight: 600; color: var(--text); }
 .poison-category { color: var(--text-dim); font-size: 11px; margin-left: auto; }
@@ -467,6 +526,7 @@ details summary::-webkit-details-marker { display: none; }
 .poison-snippet { display: block; margin-top: 4px; padding: 4px 6px; background: var(--surface2);
   border-radius: 4px; font-family: monospace; font-size: 11px; color: var(--text-dim);
   white-space: pre-wrap; word-break: break-all; }
+.poison-caveat { margin-top: 5px; font-size: 11px; color: var(--text-dim); font-style: italic; line-height: 1.4; }
 .poison-clean { margin-top: 10px; font-size: 12px; color: var(--success); }
 .poison-llm-row { margin-top: 12px; padding-top: 10px; border-top: 1px solid var(--border);
   display: flex; align-items: center; justify-content: space-between; gap: 8px; flex-wrap: wrap; }
@@ -547,6 +607,7 @@ details summary::-webkit-details-marker { display: none; }
   <span style="font-size:18px">🔌</span>
   <h1>MCP Server Tester</h1>
   <span class="badge">v0.1</span>
+  <button class="theme-toggle" id="theme-toggle" onclick="toggleTheme()" aria-label="Toggle dark / light mode" title="Toggle dark / light mode">🌙</button>
 </header>
 
 <div class="layout">
@@ -726,6 +787,24 @@ details summary::-webkit-details-marker { display: none; }
 <div id="copy-toast">Copied ✓</div>
 
 <script>
+// ── Theme ────────────────────────────────────────────────────────
+// data-theme itself is set synchronously in <head> (before first paint) to avoid a flash;
+// this just keeps the toggle button's icon/label in sync with whatever is active.
+function applyThemeIcon() {
+  const btn = document.getElementById('theme-toggle');
+  if (!btn) return;
+  const isLight = document.documentElement.getAttribute('data-theme') === 'light';
+  btn.textContent = isLight ? '☀️' : '🌙';
+  btn.title = isLight ? 'Switch to dark mode' : 'Switch to light mode';
+}
+function toggleTheme() {
+  const next = document.documentElement.getAttribute('data-theme') === 'light' ? 'dark' : 'light';
+  document.documentElement.setAttribute('data-theme', next);
+  localStorage.setItem('mcp-tester-theme', next);
+  applyThemeIcon();
+}
+applyThemeIcon();
+
 // ── State ────────────────────────────────────────────────────────
 let currentTools = [];
 let currentResources = [];
@@ -742,6 +821,12 @@ let protocolHistory = [];     // [{ts_ms, direction, method, body}, ...]
 let connectionStartTime = null; // Date.now() when connection completed
 const MAX_PROTO_MSGS   = 200;
 const MAX_PAYLOAD_CHARS = 5000;
+
+// lastConnectData / lastDeepScanResult back the report export feature — see "── Report
+// Export ──" below. Both are reset on every new connect so a report can never mix data
+// from two different servers.
+let lastConnectData = null;    // { data, roundtripMs, timestamp } from the last successful /api/connect
+let lastDeepScanResult = null; // { model, findings } from the last successful Deep scan, or null
 
 // ── Cost model pricing ($/1M tokens, editable at runtime) ────────
 const MODELS = [
@@ -1413,6 +1498,9 @@ function renderProtoMessagesCard() {
 }
 
 function renderResults(data, roundtripMs) {
+  lastConnectData = { data, roundtripMs, timestamp: new Date() };
+  lastDeepScanResult = null; // new server data — any earlier Deep scan no longer applies
+
   currentTools     = data.tools     || [];
   currentResources = data.resources || [];
   currentPrompts   = data.prompts   || [];
@@ -1430,7 +1518,13 @@ function renderResults(data, roundtripMs) {
 
   document.getElementById('main').innerHTML = `
     <div class="card">
-      <div class="card-title">Server Info</div>
+      <div class="card-header-row">
+        <div class="card-title">Server Info</div>
+        <div class="card-header-actions">
+          <button class="btn-sm" id="export-report-md-btn" onclick="exportReport('markdown')" title="Export inspection report as Markdown">📄 Markdown</button>
+          <button class="btn-sm" id="export-report-json-btn" onclick="exportReport('json')" title="Export inspection report as JSON">🧾 JSON</button>
+        </div>
+      </div>
       <div class="info-grid">
         <span class="info-key">Name</span>       <span class="info-val">${escHtml(si.name || '—')}</span>
         <span class="info-key">Version</span>    <span class="info-val">${escHtml(si.version || '—')}</span>
@@ -1930,11 +2024,262 @@ function toMcpFormat(t)    { return { name: t.name, description: t.description, 
 function copyTool(idx, fmt) { copyText(JSON.stringify(fmt === 'claude' ? toClaudeFormat(currentTools[idx]) : toMcpFormat(currentTools[idx]), null, 2)); }
 function copyAllTools(fmt)  { copyText(JSON.stringify(currentTools.map(t => fmt === 'claude' ? toClaudeFormat(t) : toMcpFormat(t)), null, 2)); }
 function copyText(text) {
-  navigator.clipboard.writeText(text).then(() => {
-    const toast = document.getElementById('copy-toast');
-    toast.classList.add('show');
-    setTimeout(() => toast.classList.remove('show'), 2000);
-  });
+  navigator.clipboard.writeText(text).then(() => showToast('Copied ✓'));
+}
+
+// Shared bottom-of-screen toast. msg always goes through escHtml, even though today's
+// callers only pass fixed strings — keeps this safe by construction if a future caller
+// ever passes something derived from server/tool data.
+let _toastTimer = null;
+function showToast(msg) {
+  const toast = document.getElementById('copy-toast');
+  if (!toast) return;
+  toast.innerHTML = escHtml(msg);
+  toast.classList.add('show');
+  clearTimeout(_toastTimer);
+  _toastTimer = setTimeout(() => toast.classList.remove('show'), 2500);
+}
+
+// ── Report Export ────────────────────────────────────────────────
+// Builds a self-contained Markdown or JSON report from data already displayed on screen
+// (server info, timing, token summary, LLM Readiness Score, Tool Poisoning Risk). Runs
+// entirely client-side — no new server endpoint — and is unaffected by MCP_TESTER_DEMO_MODE.
+//
+// Secret handling: query-string values that look like secrets are masked before the URL
+// ever enters the report, and only the auth *method name* (never a token/key/header value)
+// is included. See sanitizeUrlForReport() and currentAuthTypeLabel() below.
+
+const MCP_TESTER_VERSION = '0.1.4';
+const REPORT_FORMAT_VERSION = '1.0';
+
+const REPORT_DISCLAIMER = `This report was generated automatically by mcp-tester
+(https://github.com/ytkoka/mcp-tester, v${MCP_TESTER_VERSION}) and reflects a single snapshot
+at the time of inspection. MCP servers can change at any time, so results may no
+longer be current.
+
+Security checks are heuristic and based on known patterns. They can miss cleverly
+obfuscated threats (false negatives) and may flag legitimate tools (false positives).
+A passing score does not mean the server is safe — it only means no known patterns
+were detected. This is not a professional security audit or a certification.
+
+The LLM Readiness Score is a heuristic indicator specific to mcp-tester, not an
+absolute judgment of a server's quality or suitability. Different criteria would
+yield different results.
+
+This report is provided "as is", without warranty of any kind. Any decisions based
+on it are the sole responsibility of the reader. The mcp-tester authors accept no
+liability for its use.`;
+
+const AUTH_METHOD_LABELS_FOR_REPORT = { none: 'None', bearer: 'Bearer Token', oauth2_cc: 'OAuth CC', header: 'Custom Header', sso: 'SSO (PKCE)' };
+function currentAuthTypeLabel() {
+  const method = (lastAuthDebug && lastAuthDebug.method) || (currentConnection && currentConnection.auth && currentConnection.auth.type) || 'none';
+  return AUTH_METHOD_LABELS_FOR_REPORT[method] || method;
+}
+
+// Query-param names matching this are secret-shaped (API keys, tokens, passwords, ...) and
+// their values are masked. Errs toward over-masking — a false positive just hides a harmless
+// param, a false negative leaks a credential into a file meant to be shared externally.
+const SECRET_PARAM_RE = /key|token|secret|password|passwd|pwd|auth|credential/i;
+
+function sanitizeUrlForReport(rawUrl) {
+  try {
+    const u = new URL(rawUrl);
+    if (u.username || u.password) { u.username = ''; u.password = ''; }
+    for (const name of [...u.searchParams.keys()]) {
+      if (SECRET_PARAM_RE.test(name)) u.searchParams.set(name, '***');
+    }
+    return u.toString();
+  } catch {
+    // Malformed URL — URL() couldn't parse it, so fall back to a best-effort regex mask
+    // rather than dropping the sanitization step entirely.
+    return String(rawUrl).replace(/([?&][^=&#]*(?:key|token|secret|password|passwd|pwd|auth|credential)[^=&#]*=)[^&#]*/gi, '$1***');
+  }
+}
+
+function slugForFilename(s) {
+  return (s || 'server').toString().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 60) || 'server';
+}
+function dateStampForFilename(isoString) {
+  return isoString.slice(0, 10).replace(/-/g, '');
+}
+
+async function buildReportData() {
+  if (!currentConnection || !lastConnectData) return null;
+  const { data, roundtripMs, timestamp } = lastConnectData;
+  const si = data.server_info || {};
+  const ts = data.token_summary || {};
+
+  const scoreS = currentTools.length ? scoreServer(currentTools) : null;
+  const scoreG = scoreS ? scoreGrade(scoreS.overall) : null;
+
+  // Recomputed fresh (not cached) so the report always reflects the tools currently on
+  // screen; scanToolPoisoning is deterministic for a given tool set + server URL.
+  const poison = await scanToolPoisoning(currentTools, currentConnection.url);
+  const poisonG = poisonGrade(poison.overall);
+
+  const provider = tokenDisplayMode === 'api' ? document.getElementById('token-provider').value : 'generic';
+
+  const tools = currentTools.map(t => ({
+    name: t.name,
+    token_cost: (tokenDisplayMode === 'api' && t.accurate_tokens != null) ? t.accurate_tokens : t.estimated_tokens,
+  }));
+
+  const heuristicFindings = poison.findings.map(f => ({
+    severity: (f.severity || '').toUpperCase(),
+    tool: f.tool || null,
+    category: POISON_CATEGORY_LABELS[f.category] || f.category,
+    // Rug-pull findings get the same on-screen caveat appended, so a report shared outside
+    // the app doesn't read as a flat accusation — see RUG_PULL_CAVEAT.
+    description: f.category === 'rug-pull' ? `${f.detail || ''} ${RUG_PULL_CAVEAT}` : (f.detail || ''),
+  }));
+  const deepFindings = lastDeepScanResult
+    ? lastDeepScanResult.findings
+        .filter(f => f.risk && f.risk !== 'none')
+        .map(f => ({ severity: (f.risk || '').toUpperCase(), tool: f.tool || null, category: 'LLM analysis', description: f.reason || '' }))
+    : [];
+
+  return {
+    report_format_version: REPORT_FORMAT_VERSION,
+    generated_by: 'mcp-tester',
+    mcp_tester_version: MCP_TESTER_VERSION,
+    inspected_at: timestamp.toISOString(),
+    server: {
+      name: si.name || null,
+      version: si.version || null,
+      protocol: si.protocol_version || null,
+      transport: data.transport_used || null,
+      url: sanitizeUrlForReport(currentConnection.url),
+    },
+    auth_type: currentAuthTypeLabel(),
+    timing: { mcp_fetch_ms: data.fetch_time_ms ?? null, roundtrip_ms: roundtripMs ?? null },
+    tokens: {
+      provider,
+      tool_count: data.tool_count ?? currentTools.length,
+      tool_tokens: ts.tools_total ?? null,
+      est_per_request: ts.per_request_estimate ?? null,
+    },
+    readiness: scoreS ? {
+      grade: scoreG.grade,
+      score: scoreS.overall,
+      dimensions: [
+        { name: 'Tool descriptions',   score: scoreS.dims.desc,        weight: 0.20 },
+        { name: 'Param descriptions',  score: scoreS.dims.paramDesc,   weight: 0.25 },
+        { name: 'Type definitions',    score: scoreS.dims.typeDefs,    weight: 0.25 },
+        { name: 'Required annotation', score: scoreS.dims.required,    weight: 0.15 },
+        { name: 'Schema specificity',  score: scoreS.dims.specificity, weight: 0.15 },
+      ],
+    } : null,
+    poisoning: {
+      grade: poisonG.grade,
+      score: poison.overall,
+      scan_type: lastDeepScanResult ? 'heuristic+deep' : 'heuristic',
+      deep_scan_model: lastDeepScanResult ? lastDeepScanResult.model : null,
+      findings: [...heuristicFindings, ...deepFindings],
+    },
+    tools,
+    disclaimer: REPORT_DISCLAIMER,
+  };
+}
+
+function mdCell(s) {
+  return String(s ?? '').replace(/\r?\n/g, ' ').replace(/\|/g, '\\|').trim();
+}
+function mdCode(s) {
+  return '`' + String(s ?? '').replace(/`/g, "'") + '`';
+}
+
+function renderReportMarkdown(report) {
+  const srv = report.server;
+  const lines = [];
+  lines.push(`# MCP Server Report: ${srv.name || 'Unknown Server'}`);
+  lines.push('');
+  lines.push(`- **URL**: ${srv.url || '—'}`);
+  lines.push(`- **Protocol**: ${srv.protocol || '—'}`);
+  lines.push(`- **Transport**: ${srv.transport || '—'}`);
+  lines.push(`- **Server version**: ${srv.version || '—'}`);
+  lines.push(`- **Auth method**: ${report.auth_type}`);
+  lines.push(`- **Inspected**: ${report.inspected_at}`);
+  lines.push(`- **Generated by**: mcp-tester v${report.mcp_tester_version}`);
+  lines.push('');
+
+  lines.push('## Summary');
+  lines.push(`- Tools: ${report.tokens.tool_count}`);
+  lines.push(`- Tool tokens: ${fmtNum(report.tokens.tool_tokens)} (provider: ${report.tokens.provider})`);
+  lines.push(`- Est. per request: ${fmtNum(report.tokens.est_per_request)}`);
+  lines.push(`- MCP fetch: ${fmtMs(report.timing.mcp_fetch_ms)} / Roundtrip: ${fmtMs(report.timing.roundtrip_ms)}`);
+  if (report.readiness) lines.push(`- LLM Readiness: ${report.readiness.grade} (${report.readiness.score}/100)`);
+  const scanNote = report.poisoning.scan_type === 'heuristic+deep'
+    ? `heuristic + deep scan (Claude API, model: ${report.poisoning.deep_scan_model})`
+    : 'heuristic scan';
+  lines.push(`- Tool Poisoning Risk: ${report.poisoning.grade} (${report.poisoning.score}/100) — ${scanNote}`);
+  lines.push('');
+
+  if (report.readiness) {
+    lines.push('## LLM Readiness breakdown');
+    lines.push('| Dimension | Score | Weight |');
+    lines.push('|-----------|-------|--------|');
+    for (const d of report.readiness.dimensions) lines.push(`| ${mdCell(d.name)} | ${d.score} | ${Math.round(d.weight * 100)}% |`);
+    lines.push('');
+  }
+
+  lines.push('## Tool Poisoning findings');
+  if (report.poisoning.findings.length) {
+    for (const f of report.poisoning.findings)
+      lines.push(`- **${mdCell(f.severity)}** ${f.tool ? mdCode(f.tool) + ' ' : ''}(${mdCell(f.category)}) — ${mdCell(f.description)}`);
+  } else {
+    lines.push('No suspicious patterns detected.');
+  }
+  lines.push('');
+
+  if (report.tools.length) {
+    lines.push('## Tools');
+    lines.push('| Tool | Token cost |');
+    lines.push('|------|-----------|');
+    for (const t of report.tools) lines.push(`| ${mdCell(t.name)} | ~${fmtNum(t.token_cost)} |`);
+    lines.push('');
+  }
+
+  lines.push('---');
+  lines.push('## Disclaimer');
+  lines.push(report.disclaimer);
+  lines.push('');
+
+  return lines.join('\n');
+}
+
+function downloadBlob(content, filename, mimeType) {
+  const blob = new Blob([content], { type: mimeType + ';charset=utf-8' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+async function exportReport(format) {
+  if (!currentConnection || !lastConnectData) return; // nothing inspected yet — no-op
+  const btnId = format === 'markdown' ? 'export-report-md-btn' : 'export-report-json-btn';
+  const btn = document.getElementById(btnId);
+  const original = btn ? btn.textContent : '';
+  if (btn) { btn.disabled = true; btn.textContent = 'Generating…'; }
+  try {
+    const report = await buildReportData();
+    if (!report) return;
+    const filenameBase = `mcp-report-${slugForFilename(report.server.name)}-${dateStampForFilename(report.inspected_at)}`;
+    if (format === 'markdown') {
+      downloadBlob(renderReportMarkdown(report), `${filenameBase}.md`, 'text/markdown');
+    } else {
+      downloadBlob(JSON.stringify(report, null, 2), `${filenameBase}.json`, 'application/json');
+    }
+    showToast(`✓ ${format === 'markdown' ? 'Markdown' : 'JSON'} report downloaded`);
+  } catch (e) {
+    showToast(`✗ Export failed: ${e.message || e}`);
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = original; }
+  }
 }
 
 // ── Execute ──────────────────────────────────────────────────────
@@ -2361,7 +2706,7 @@ function renderTimingSection(timing, fetchMs, roundtripMs) {
   const networkMs = Math.max(0, (roundtripMs || 0) - (fetchMs || 0));
   const phases = [
     { label: 'transport_connect', ms: timing.transport_connect_ms || 0, color: 'var(--accent)' },
-    { label: 'initialize',        ms: timing.initialize_ms        || 0, color: '#d29922' },
+    { label: 'initialize',        ms: timing.initialize_ms        || 0, color: 'var(--warning)' },
     { label: 'list_tools',        ms: timing.list_tools_ms        || 0, color: 'var(--success)' },
     { label: 'list_resources',    ms: timing.list_resources_ms    || 0, color: '#a78bfa' },
     { label: 'list_prompts',      ms: timing.list_prompts_ms      || 0, color: '#fb923c' },
@@ -2399,10 +2744,10 @@ function syntaxHighlight(obj) {
   if (!obj || Object.keys(obj).length === 0) return '<span style="color:var(--text-dim)">{}</span>';
   return JSON.stringify(obj, null, 2)
     .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
-    .replace(/"([^"]+)":/g,'<span style="color:#79c0ff">"$1"</span>:')
-    .replace(/: "([^"]*)"/g,': <span style="color:#a5d6ff">"$1"</span>')
-    .replace(/: (true|false)/g,': <span style="color:#ff7b72">$1</span>')
-    .replace(/: (\d+)/g,': <span style="color:#f2cc60">$1</span>');
+    .replace(/"([^"]+)":/g,'<span style="color:var(--syntax-key)">"$1"</span>:')
+    .replace(/: "([^"]*)"/g,': <span style="color:var(--syntax-string)">"$1"</span>')
+    .replace(/: (true|false)/g,': <span style="color:var(--syntax-bool)">$1</span>')
+    .replace(/: (\d+)/g,': <span style="color:var(--syntax-number)">$1</span>');
 }
 
 // ── Tool Quality Scoring ──────────────────────────────────────────
@@ -2492,7 +2837,7 @@ function scoreGrade(v) {
   if (v >= 90) return { grade: 'A', label: 'LLM-ready',         color: 'var(--success)' };
   if (v >= 75) return { grade: 'B', label: 'Good',              color: 'var(--accent)'  };
   if (v >= 60) return { grade: 'C', label: 'Adequate',          color: 'var(--warning)' };
-  if (v >= 45) return { grade: 'D', label: 'Needs improvement', color: '#e3700a'        };
+  if (v >= 45) return { grade: 'D', label: 'Needs improvement', color: 'var(--warning-strong)' };
   return               { grade: 'F', label: 'Poor',             color: 'var(--error)'   };
 }
 
@@ -2603,6 +2948,14 @@ const POISON_CATEGORY_LABELS = {
   'authority-language': 'Authority Language',
   'rug-pull': 'Rug Pull',
 };
+
+// Rug-pull detection only proves the tool definition changed since the last connect to this
+// server — it cannot tell a malicious change from a legitimate one (e.g. a provider shipping
+// a normal update). Shown next to every rug-pull finding (on screen and in exported reports)
+// so a legitimate change isn't mistaken for an attack. Detection logic itself is untouched —
+// this is display text only.
+const RUG_PULL_CAVEAT = 'This only means the tool definition changed since you last connected — '
+  + 'which is also what a legitimate update looks like. Review the change before treating it as malicious.';
 
 function _poisonSnippet(text, idx, len) {
   const start = Math.max(0, idx - 20);
@@ -2758,7 +3111,7 @@ function poisonGrade(v) {
   if (v >= 95) return { grade: 'A', label: 'No issues detected',                  color: 'var(--success)' };
   if (v >= 80) return { grade: 'B', label: 'Minor concerns',                      color: 'var(--accent)'  };
   if (v >= 60) return { grade: 'C', label: 'Review recommended',                  color: 'var(--warning)' };
-  if (v >= 35) return { grade: 'D', label: 'Suspicious patterns found',           color: '#e3700a'        };
+  if (v >= 35) return { grade: 'D', label: 'Suspicious patterns found',           color: 'var(--warning-strong)' };
   return               { grade: 'F', label: 'High risk — manual review required', color: 'var(--error)'   };
 }
 
@@ -2809,6 +3162,7 @@ function renderPoisoningCardBody(s) {
       </div>
       <div class="poison-detail">${escHtml(f.detail)}</div>
       ${f.snippet ? `<code class="poison-snippet">${escHtml(f.snippet)}</code>` : ''}
+      ${f.category === 'rug-pull' ? `<div class="poison-caveat">ℹ️ ${escHtml(RUG_PULL_CAVEAT)}</div>` : ''}
     </div>`;
   }).join('');
 
@@ -2862,6 +3216,8 @@ async function runLLMSecurityScan() {
     });
     const data = await resp.json();
     if (!resp.ok || !data.success) throw new Error(data.error || 'Scan failed');
+
+    lastDeepScanResult = { model: document.getElementById('api-model').value, findings: data.findings || [] };
 
     status.innerHTML = `<span style="color:var(--success)">✓ done</span>`;
     const flagged = (data.findings || []).filter(f => f.risk && f.risk !== 'none');
