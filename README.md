@@ -269,9 +269,9 @@ Select a provider in the **Token Counting** section of the sidebar. Switching pr
 
 ### 7 — Copy tool definitions
 
-In the Token Summary card or on each tool card:
-- **Copy as Claude API format** — uses `input_schema` key, ready for `anthropic.messages.create(tools=[…])`
-- **Copy as MCP format** — uses `inputSchema` key, the native MCP representation
+In the Server Info card's top-right corner (all tools at once) or on each individual tool card:
+- **Claude Format** — uses `input_schema` key, ready for `anthropic.messages.create(tools=[…])`
+- **MCP Format** — uses `inputSchema` key, the native MCP representation
 
 ### 8 — LLM Readiness Score
 
@@ -440,7 +440,7 @@ After connecting (and during subsequent interactions), a **Protocol Messages** c
 
 ### 12 — Export report
 
-After connecting, the **Server Info** card shows two buttons in its top-right corner: **📄 Markdown** and **🧾 JSON**. Both generate a self-contained snapshot of everything currently on screen for the connected server — server info, timing, Token Summary, LLM Readiness Score breakdown, and Tool Poisoning Risk findings (heuristic, plus Deep scan findings if you ran one).
+After connecting, the **Server Info** card's top-right corner shows **📄 Markdown** and **🧾 JSON** (next to the Copy buttons from [§7](#7--copy-tool-definitions)). Both generate a self-contained snapshot of everything currently on screen for the connected server — server info, timing, Token Summary, LLM Readiness Score breakdown, and Tool Poisoning Risk findings (heuristic, plus Deep scan findings if you ran one).
 
 Generation happens entirely in the browser (no server round-trip) and downloads immediately as a file named `mcp-report-<server-name>-<YYYYMMDD>.md` / `.json`.
 

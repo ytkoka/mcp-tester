@@ -163,9 +163,10 @@ select option { background: var(--surface2); }
   font-size: 11px; color: var(--text-muted); text-transform: uppercase;
   letter-spacing: 0.06em; margin-bottom: 10px; font-weight: 600;
 }
-.card-header-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 10px; }
+.card-header-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 10px; flex-wrap: wrap; }
 .card-header-row .card-title { margin-bottom: 0; }
-.card-header-actions { display: flex; gap: 6px; flex-shrink: 0; }
+.card-header-actions { display: flex; align-items: center; gap: 6px; flex-shrink: 0; flex-wrap: wrap; row-gap: 6px; }
+.card-header-divider { width: 1px; align-self: stretch; background: var(--border); margin: 0 2px; }
 
 /* Stats */
 .stats-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; }
@@ -1521,6 +1522,9 @@ function renderResults(data, roundtripMs) {
       <div class="card-header-row">
         <div class="card-title">Server Info</div>
         <div class="card-header-actions">
+          <button class="btn-sm" onclick="copyAllTools('claude')" title="Copy all tool definitions in Claude API format">Claude Format</button>
+          <button class="btn-sm" onclick="copyAllTools('mcp')" title="Copy all tool definitions in MCP format">MCP Format</button>
+          <span class="card-header-divider"></span>
           <button class="btn-sm" id="export-report-md-btn" onclick="exportReport('markdown')" title="Export inspection report as Markdown">📄 Markdown</button>
           <button class="btn-sm" id="export-report-json-btn" onclick="exportReport('json')" title="Export inspection report as JSON">🧾 JSON</button>
         </div>
@@ -1565,10 +1569,6 @@ function renderResults(data, roundtripMs) {
           </button>
           <span id="count-api-status" style="font-size:11px"></span>
         </div>
-      </div>
-      <div style="margin-top:12px;display:flex;gap:8px">
-        <button class="btn-sm" onclick="copyAllTools('claude')">Copy as Claude API format</button>
-        <button class="btn-sm" onclick="copyAllTools('mcp')">Copy as MCP format</button>
       </div>
       ${renderCostCard()}
     </div>
@@ -2049,7 +2049,7 @@ function showToast(msg) {
 // ever enters the report, and only the auth *method name* (never a token/key/header value)
 // is included. See sanitizeUrlForReport() and currentAuthTypeLabel() below.
 
-const MCP_TESTER_VERSION = '0.1.4';
+const MCP_TESTER_VERSION = '0.1.5';
 const REPORT_FORMAT_VERSION = '1.0';
 
 const REPORT_DISCLAIMER = `This report was generated automatically by mcp-tester
