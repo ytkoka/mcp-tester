@@ -1299,8 +1299,8 @@ function setSSOStatusMsg(msg) {
 function waitForSSOToken(state, popup) {
   return new Promise((resolve, reject) => {
     let done = false;
-    let pollTimer, popupTimer, timeoutTimer;
-    const cleanup = () => { done = true; clearInterval(pollTimer); clearInterval(popupTimer); clearTimeout(timeoutTimer); };
+    let pollTimer, timeoutTimer;
+    const cleanup = () => { done = true; clearInterval(pollTimer); clearTimeout(timeoutTimer); };
     pollTimer = setInterval(async () => {
       if (done) return;
       try {
@@ -1309,20 +1309,15 @@ function waitForSSOToken(state, popup) {
         else if (d.status === 'error') { cleanup(); reject(d.error); }
       } catch {}
     }, 1000);
-    popupTimer = setInterval(() => {
-      if (done || !popup) return;
-      if (popup.closed) {
-        clearInterval(popupTimer);
-        setTimeout(async () => {
-          if (done) return;
-          try {
-            const d = await fetch(`/api/oauth/status/${state}`).then(r => r.json());
-            if (d.status === 'ready') { cleanup(); resolve(d.token); return; }
-          } catch {}
-          if (!done) { cleanup(); reject('cancelled'); }
-        }, 2000);
-      }
-    }, 500);
+    // Completion is decided solely by the poll above (ready/error) or the timeout below.
+    // We deliberately do NOT treat popup.closed as a cancellation signal: some identity
+    // providers (Postman's confirmed among them) send a Cross-Origin-Opener-Policy header
+    // on their login page that severs the opener relationship, which makes popup.closed
+    // read `true` within ~500ms of the popup navigating there — while the user is still
+    // actively logging in. Treating that as "cancelled" killed the poll before the real
+    // token ever arrived. Explicit cancellation is still available via the overlay's
+    // Cancel button (_cancelSSO below), which is a real user action rather than an
+    // unreliable window-state read.
     timeoutTimer = setTimeout(() => { if (!done) { cleanup(); reject('Authentication timed out (5 min)'); } }, 300000);
     window._cancelSSO = () => { if (!done) { cleanup(); if (popup && !popup.closed) popup.close(); reject('cancelled'); } };
   });
