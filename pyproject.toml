@@ -1,6 +1,6 @@
 [project]
 name = "remote-mcp-server-tester"
-version = "0.1.5"
+version = "0.1.6"
 description = "MCP Server Tool Inspector - connect, list tools, estimate token usage"
 readme = "README.md"
 requires-python = ">=3.11"
