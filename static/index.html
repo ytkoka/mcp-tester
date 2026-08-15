@@ -1167,7 +1167,12 @@ async function doConnect(url, auth, transport) {
   if (!resp.ok || !data.success) {
     showError(data.error || 'Connection failed', data.error_type);
   } else {
-    currentConnection = { url, auth, transport };
+    // Pin to the transport that actually worked (data.transport_used), not the raw
+    // selection (which may be "auto"). Otherwise every subsequent tool call / resource
+    // read / prompt get would redo the streamable-http-then-SSE probe on its own — and
+    // for tools with side effects, a client-side failure after the server already ran
+    // the tool would trigger a silent duplicate call via the SSE fallback.
+    currentConnection = { url, auth, transport: data.transport_used || transport };
     connectionStartTime = Date.now() - roundtripMs;
     protocolHistory = [];
     for (const msg of (data.protocol_messages || [])) protocolHistory.push(msg);
@@ -2504,26 +2509,43 @@ function tryDecodeJWT(token) {
   } catch { return null; }
 }
 
+// Reveal/copy buttons look the token up by id here instead of embedding the raw value in
+// an onclick attribute — embedding it via JSON.stringify() used to break the attribute
+// itself (JSON.stringify always wraps strings in an unescaped-for-HTML `"`, which prematurely
+// closes onclick="..." for every token, not just ones with unusual characters).
+const _tokenRevealStore = {};
+
 function maskToken(val, revealId) {
   if (!val) return '<span class="ai-val" style="color:var(--text-dim)">—</span>';
+  _tokenRevealStore[revealId] = val;
   const preview = val.length > 24 ? val.slice(0, 12) + '••••••••' + val.slice(-4) : val;
   return `<div class="ai-token-wrap">
     <span class="ai-token-val" id="${revealId}-display">${escHtml(preview)}</span>
-    <button class="ai-reveal-btn" onclick="toggleReveal('${revealId}',${JSON.stringify(val)})">show</button>
-    <button class="ai-copy-btn" onclick="navigator.clipboard.writeText(${JSON.stringify(val)}).then(()=>{this.textContent='✓';setTimeout(()=>this.textContent='copy',1200)})">copy</button>
+    <button class="ai-reveal-btn" onclick="toggleReveal('${revealId}')">show</button>
+    <button class="ai-copy-btn" onclick="copyRevealedToken('${revealId}', this)">copy</button>
   </div>`;
 }
 
-function toggleReveal(id, fullVal) {
+function toggleReveal(id) {
+  const fullVal = _tokenRevealStore[id];
   const el = document.getElementById(id + '-display');
   const btn = el?.nextElementSibling;
-  if (!el || !btn) return;
+  if (!el || !btn || fullVal == null) return;
   if (btn.textContent === 'show') {
     el.textContent = fullVal; btn.textContent = 'hide';
   } else {
     const preview = fullVal.length > 24 ? fullVal.slice(0, 12) + '••••••••' + fullVal.slice(-4) : fullVal;
     el.textContent = preview; btn.textContent = 'show';
   }
+}
+
+function copyRevealedToken(id, btn) {
+  const val = _tokenRevealStore[id];
+  if (val == null) return;
+  navigator.clipboard.writeText(val).then(() => {
+    btn.textContent = '✓';
+    setTimeout(() => { btn.textContent = 'copy'; }, 1200);
+  });
 }
 
 function fmtExpiry(exp) {

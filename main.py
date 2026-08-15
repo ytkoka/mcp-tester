@@ -18,6 +18,8 @@ from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
+from slowapi import Limiter
+from slowapi.errors import RateLimitExceeded
 
 from mcp import ClientSession
 from mcp.client.session import DEFAULT_CLIENT_INFO
@@ -39,6 +41,49 @@ app = FastAPI(title="MCP Server Tester")
 
 STATIC_DIR = Path(__file__).parent / "static"
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
+
+
+# ── Rate limiting ─────────────────────────────────────────────────
+#
+# Endpoints below that accept a user-supplied URL (MCP server / OAuth discovery /
+# token endpoints) make the server issue outbound HTTP requests to whatever host the
+# caller names. SSRF to private/reserved IPs is blocked separately by _assert_safe_url
+# (gated on MCP_TESTER_BLOCK_PRIVATE_IPS / demo mode), but requests to arbitrary public
+# hosts are allowed by design — that's the tool's job. On a public, unauthenticated
+# deployment that means anyone can use this server as a blind outbound-request relay
+# against third parties, or hold the server's limited outbound-timeout budget (up to 60s
+# per call) open with concurrent requests. Per-client rate limits bound both.
+def _client_ip(request: Request) -> str:
+    # Render/Cloudflare terminate TLS in front of this app, so request.client.host is the
+    # proxy's own address, not the caller's — read the real client IP from the headers
+    # those proxies set. Falls back to request.client.host for direct/local access.
+    cf_ip = request.headers.get("CF-Connecting-IP")
+    if cf_ip:
+        return cf_ip
+    xff = request.headers.get("X-Forwarded-For")
+    if xff:
+        return xff.split(",")[0].strip()
+    return request.client.host if request.client else "unknown"
+
+
+def _rate_limit_handler(request: Request, exc: RateLimitExceeded) -> JSONResponse:
+    # Shaped like every other error response in this app ({success, error, error_type})
+    # instead of slowapi's default {"error": ...}, so the frontend's existing
+    # `!resp.ok || !data.success` handling shows a normal error message.
+    response = JSONResponse(
+        status_code=429,
+        content={
+            "success": False,
+            "error": f"リクエストが多すぎます。しばらく待ってから再度お試しください。(limit: {exc.detail})",
+            "error_type": "RateLimitExceeded",
+        },
+    )
+    return limiter._inject_headers(response, request.state.view_rate_limit)
+
+
+limiter = Limiter(key_func=_client_ip)
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_handler)
 
 
 @app.get("/api/config")
@@ -465,17 +510,19 @@ def _serialize_prompt_messages(result: Any) -> list[dict]:
     return messages
 
 
-async def _exec_streamable(url: str, headers: dict, tool_name: str, tool_args: dict) -> Any:
+async def _exec_streamable(url: str, headers: dict, tool_name: str, tool_args: dict, call_started: list[bool]) -> Any:
     async with streamablehttp_client(url, headers=headers) as (read, write, _):
         async with ClientSession(read, write) as session:
             await session.initialize()
+            call_started[0] = True  # tool call is about to be sent — see call_tool_on_server
             return await session.call_tool(tool_name, tool_args)
 
 
-async def _exec_sse(url: str, headers: dict, tool_name: str, tool_args: dict) -> Any:
+async def _exec_sse(url: str, headers: dict, tool_name: str, tool_args: dict, call_started: list[bool]) -> Any:
     async with sse_client(url, headers=headers) as (read, write):
         async with ClientSession(read, write) as session:
             await session.initialize()
+            call_started[0] = True
             return await session.call_tool(tool_name, tool_args)
 
 
@@ -483,17 +530,33 @@ async def call_tool_on_server(url: str, headers: dict, transport: str, tool_name
     await _assert_safe_url(url)
     timeout = 60.0
     if transport == "streamable_http":
-        return await asyncio.wait_for(_exec_streamable(url, headers, tool_name, tool_args), timeout), "streamable_http"
+        return await asyncio.wait_for(_exec_streamable(url, headers, tool_name, tool_args, [False]), timeout), "streamable_http"
     if transport == "sse":
-        return await asyncio.wait_for(_exec_sse(url, headers, tool_name, tool_args), timeout), "sse"
+        return await asyncio.wait_for(_exec_sse(url, headers, tool_name, tool_args, [False]), timeout), "sse"
+
+    # auto: try streamable first, fall back to SSE — but only when we're sure the first
+    # attempt never actually reached session.call_tool(). call_started flips to True right
+    # before that call is sent; once it has, a client-side failure (dropped connection,
+    # timeout while awaiting the response, decode error, ...) doesn't tell us whether the
+    # server already ran the tool. Falling back in that case would risk silently executing
+    # a side-effecting tool (payments, emails, ...) a second time, so we refuse to retry and
+    # surface the ambiguity to the caller instead.
     err_s = ""
+    call_started = [False]
     try:
-        res = await asyncio.wait_for(_exec_streamable(url, headers, tool_name, tool_args), timeout)
+        res = await asyncio.wait_for(_exec_streamable(url, headers, tool_name, tool_args, call_started), timeout)
         return res, "streamable_http"
     except Exception as e:
+        if call_started[0]:
+            raise RuntimeError(
+                "The tool call may have already reached the server over Streamable HTTP "
+                "before this error occurred, so it was not automatically retried over SSE "
+                f"(to avoid a possible duplicate execution). Retry manually if needed.\n"
+                f"Original error: {e}"
+            ) from e
         err_s = str(e)
     try:
-        res = await asyncio.wait_for(_exec_sse(url, headers, tool_name, tool_args), timeout)
+        res = await asyncio.wait_for(_exec_sse(url, headers, tool_name, tool_args, [False]), timeout)
         return res, "sse"
     except Exception as e:
         raise RuntimeError(f"Both transports failed.\n• Streamable HTTP: {err_s}\n• SSE: {e}")
@@ -844,7 +907,8 @@ class DiscoverRequest(BaseModel):
 
 
 @app.post("/api/oauth/start")
-async def oauth_start(req: OAuthStartRequest):
+@limiter.limit("5/minute")
+async def oauth_start(request: Request, req: OAuthStartRequest):
     try:
         _cleanup_oauth()
 
@@ -1019,7 +1083,8 @@ async def oauth_status(state: str):
 
 
 @app.post("/api/oauth/discover")
-async def oauth_discover(req: DiscoverRequest):
+@limiter.limit("10/minute")
+async def oauth_discover(request: Request, req: DiscoverRequest):
     try:
         result = await _discover_oauth_full(req.url)
         if result.get("found"):
@@ -1344,7 +1409,8 @@ async def security_scan_api(req: SecurityScanRequest):
 
 
 @app.post("/api/connect")
-async def connect_to_mcp(req: ConnectRequest):
+@limiter.limit("10/minute")
+async def connect_to_mcp(request: Request, req: ConnectRequest):
     try:
         headers, token_info = await build_headers(req.auth)
 
@@ -1399,7 +1465,8 @@ async def connect_to_mcp(req: ConnectRequest):
 
 
 @app.post("/api/execute")
-async def execute_tool_api(req: ExecuteRequest):
+@limiter.limit("20/minute")
+async def execute_tool_api(request: Request, req: ExecuteRequest):
     try:
         headers, token_info = await build_headers(req.auth)
         t0 = time.perf_counter()
@@ -1425,7 +1492,8 @@ async def execute_tool_api(req: ExecuteRequest):
 
 
 @app.post("/api/resources/read")
-async def read_resource_api(req: ReadResourceRequest):
+@limiter.limit("20/minute")
+async def read_resource_api(request: Request, req: ReadResourceRequest):
     try:
         headers, token_info = await build_headers(req.auth)
         t0 = time.perf_counter()
@@ -1450,7 +1518,8 @@ async def read_resource_api(req: ReadResourceRequest):
 
 
 @app.post("/api/prompts/get")
-async def get_prompt_api(req: GetPromptRequest):
+@limiter.limit("20/minute")
+async def get_prompt_api(request: Request, req: GetPromptRequest):
     try:
         headers, token_info = await build_headers(req.auth)
         t0 = time.perf_counter()
