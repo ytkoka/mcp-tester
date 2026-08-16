@@ -74,7 +74,7 @@ def _rate_limit_handler(request: Request, exc: RateLimitExceeded) -> JSONRespons
         status_code=429,
         content={
             "success": False,
-            "error": f"リクエストが多すぎます。しばらく待ってから再度お試しください。(limit: {exc.detail})",
+            "error": f"Too many requests. Please wait a moment and try again. (limit: {exc.detail})",
             "error_type": "RateLimitExceeded",
         },
     )
@@ -927,8 +927,8 @@ async def oauth_start(request: Request, req: OAuthStartRequest):
                     content={
                         "success": False,
                         "error": (
-                            "OAuth 設定を MCP サーバーから自動検出できませんでした。\n"
-                            "詳細設定で Authorization URL・Token Endpoint・Client ID を入力してください。"
+                            "Could not auto-discover OAuth configuration from the MCP server.\n"
+                            "Please enter the Authorization URL, Token Endpoint, and Client ID in Advanced Settings."
                         ),
                         "needs_manual": True,
                     },
@@ -945,8 +945,8 @@ async def oauth_start(request: Request, req: OAuthStartRequest):
                     content={
                         "success": False,
                         "error": (
-                            "サーバーが Dynamic Client Registration (RFC 7591) をサポートしていません。\n"
-                            "詳細設定で Client ID を入力してください。"
+                            "The server does not support Dynamic Client Registration (RFC 7591).\n"
+                            "Please enter a Client ID in Advanced Settings."
                         ),
                         "needs_client_id": True,
                     },
@@ -958,7 +958,7 @@ async def oauth_start(request: Request, req: OAuthStartRequest):
                     status_code=400,
                     content={
                         "success": False,
-                        "error": f"Dynamic Client Registration に失敗しました: {e}\n詳細設定で Client ID を入力してください。",
+                        "error": f"Dynamic Client Registration failed: {e}\nPlease enter a Client ID in Advanced Settings.",
                         "needs_client_id": True,
                     },
                 )
@@ -969,7 +969,7 @@ async def oauth_start(request: Request, req: OAuthStartRequest):
         if not auth_endpoint or not token_endpoint or not client_id:
             return JSONResponse(
                 status_code=400,
-                content={"success": False, "error": "auth_endpoint / token_endpoint / client_id が取得できませんでした。"},
+                content={"success": False, "error": "Could not obtain auth_endpoint / token_endpoint / client_id."},
             )
 
         await _assert_safe_url(auth_endpoint)
@@ -1028,18 +1028,18 @@ async def oauth_callback(
     error_description: Optional[str] = None,
 ):
     if not state or state not in _oauth_pending:
-        return _sso_page("⚠️ Invalid state", "このウィンドウを閉じてください", "#f85149", auto_close=False)
+        return _sso_page("⚠️ Invalid state", "Please close this window.", "#f85149", auto_close=False)
 
     pending = _oauth_pending[state]
 
     if error:
         desc = html_module.escape(error_description or "")
         pending["result"] = {"error": f"{error}: {desc}"}
-        return _sso_page("⚠️ 認証エラー", html_module.escape(f"{error}: {error_description or ''}"), "#f85149")
+        return _sso_page("⚠️ Authentication error", html_module.escape(f"{error}: {error_description or ''}"), "#f85149")
 
     if not code:
-        pending["result"] = {"error": "認証コードが受信できませんでした"}
-        return _sso_page("⚠️ エラー", "認証コードが受信できませんでした", "#f85149")
+        pending["result"] = {"error": "No authorization code was received"}
+        return _sso_page("⚠️ Error", "No authorization code was received", "#f85149")
 
     try:
         data: dict[str, str] = {
@@ -1059,14 +1059,14 @@ async def oauth_callback(
 
         access_token = token_data.get("access_token")
         if not access_token:
-            raise ValueError(f"access_token がレスポンスに含まれていません (keys: {list(token_data.keys())})")
+            raise ValueError(f"Response did not include an access_token (keys: {list(token_data.keys())})")
 
         pending["result"] = {"token": access_token}
-        return _sso_page("✅ 認証成功", "このウィンドウは自動的に閉じます", "#3fb950")
+        return _sso_page("✅ Authentication successful", "This window will close automatically.", "#3fb950")
 
     except Exception as e:
         pending["result"] = {"error": str(e)}
-        return _sso_page("⚠️ トークン取得失敗", html_module.escape(str(e)), "#f85149", auto_close=False)
+        return _sso_page("⚠️ Failed to retrieve token", html_module.escape(str(e)), "#f85149", auto_close=False)
 
 
 @app.get("/api/oauth/status/{state}")
@@ -1131,8 +1131,8 @@ async def count_tokens_api(req: CountTokensRequest):
             content={
                 "success": False,
                 "error": (
-                    "このデプロイでは Claude API を使ったトークンカウントが無効化されています。"
-                    "Generic または OpenAI (tiktoken) モードをご利用ください。"
+                    "Claude API token counting is disabled on this deployment. "
+                    "Please use the Generic or OpenAI (tiktoken) mode instead."
                 ),
                 "error_type": "ClaudeAPIDisabled",
             },
@@ -1328,8 +1328,8 @@ async def security_scan_api(req: SecurityScanRequest):
             content={
                 "success": False,
                 "error": (
-                    "このデプロイでは Deep scan (Claude API) が無効化されています。"
-                    "ヒューリスティック検出は引き続きご利用いただけます。"
+                    "Deep scan (Claude API) is disabled on this deployment. "
+                    "Heuristic detection is still available."
                 ),
                 "error_type": "ClaudeAPIDisabled",
             },
