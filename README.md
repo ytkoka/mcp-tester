@@ -1,5 +1,7 @@
 # Remote MCP Server Tester
 
+**English** | [日本語](README.ja.md)
+
 A web-based tool for inspecting [Model Context Protocol (MCP)](https://modelcontextprotocol.io) servers.  
 Connect to any MCP server, browse its **Tools, Resources, and Prompts**, measure fetch latency, estimate token usage, **score the quality of tool definitions**, and **compare two servers side by side**.
 
