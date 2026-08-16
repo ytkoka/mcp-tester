@@ -1,0 +1,598 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>MCP Server Tester</title>
+<meta name="description" content="A web-based inspector for Model Context Protocol servers: browse tools, resources and prompts, estimate token cost, grade tool definitions A–F, and scan for tool-poisoning risk." />
+<meta property="og:title" content="MCP Server Tester" />
+<meta property="og:description" content="Connect to any MCP server. Inspect it, score it, secure it." />
+<meta property="og:image" content="https://ytkoka.github.io/mcp-tester/mcp-server-tester2.png" />
+<meta property="og:type" content="website" />
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Crect width='24' height='24' rx='4' fill='%230e211d'/%3E%3Cpath d='M4 12h4l2-6 4 12 2-6h4' stroke='%234fe0d2' stroke-width='2' fill='none' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E" />
+<script>
+  (function () {
+    var stored = null;
+    try { stored = localStorage.getItem('mcp-landing-theme'); } catch (e) {}
+    if (stored === 'light' || stored === 'dark') {
+      document.documentElement.setAttribute('data-theme', stored);
+    }
+  })();
+</script>
+<style>
+  :root {
+    --ground: #edf2f0;
+    --surface: #ffffff;
+    --surface-2: #f4f8f6;
+    --ink: #16231f;
+    --ink-dim: #4b5d57;
+    --rule: #cbd6d2;
+    --signal: #12867b;
+    --signal-ink: #ffffff;
+    --copper: #b5661f;
+    --success: #2f7d43;
+    --danger: #b23c31;
+    --shadow: rgba(20, 40, 35, 0.08);
+
+    --font-mono: ui-monospace, "SF Mono", "JetBrains Mono", "IBM Plex Mono", Menlo, Consolas, "Liberation Mono", monospace;
+    --font-sans: ui-sans-serif, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+
+    --step-caption: 0.6875rem;
+    --step-small: 0.8125rem;
+    --step-body: 1rem;
+    --step-lede: 1.1875rem;
+    --step-h3: 1.375rem;
+    --step-h2: 1.75rem;
+    --step-h1: clamp(2.25rem, 5.4vw, 3.75rem);
+
+    --content-w: 880px;
+  }
+
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --ground: #091513;
+      --surface: #0e211d;
+      --surface-2: #0c1b18;
+      --ink: #e7f3ef;
+      --ink-dim: #93aca5;
+      --rule: #1c332d;
+      --signal: #4fe0d2;
+      --signal-ink: #06211d;
+      --copper: #f0ae5e;
+      --success: #6bc489;
+      --danger: #e2685c;
+      --shadow: rgba(0, 0, 0, 0.35);
+    }
+  }
+
+  :root[data-theme="dark"] {
+    --ground: #091513;
+    --surface: #0e211d;
+    --surface-2: #0c1b18;
+    --ink: #e7f3ef;
+    --ink-dim: #93aca5;
+    --rule: #1c332d;
+    --signal: #4fe0d2;
+    --signal-ink: #06211d;
+    --copper: #f0ae5e;
+    --success: #6bc489;
+    --danger: #e2685c;
+    --shadow: rgba(0, 0, 0, 0.35);
+  }
+
+  * { box-sizing: border-box; }
+  html { color-scheme: light dark; }
+
+  body {
+    margin: 0;
+    background: var(--ground);
+    color: var(--ink);
+    font-family: var(--font-sans);
+    font-size: var(--step-body);
+    line-height: 1.6;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  a { color: var(--signal); }
+  a:focus-visible, button:focus-visible { outline: 2px solid var(--signal); outline-offset: 2px; }
+
+  .eyebrow {
+    font-family: var(--font-mono);
+    font-size: var(--step-caption);
+    letter-spacing: 0.11em;
+    text-transform: uppercase;
+    color: var(--ink-dim);
+  }
+
+  .wrap {
+    max-width: var(--content-w);
+    margin: 0 auto;
+    padding: 0 24px;
+  }
+
+  h1, h2, h3 { font-family: var(--font-mono); font-weight: 700; text-wrap: balance; margin: 0; }
+
+  code, .mono { font-family: var(--font-mono); }
+
+  /* ── Nameplate strip (top + bottom, matching hairlines) ─────────── */
+  .nameplate {
+    border-bottom: 1px solid var(--rule);
+  }
+  .nameplate .wrap {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 16px;
+    padding-top: 16px;
+    padding-bottom: 16px;
+    font-family: var(--font-mono);
+    font-size: var(--step-small);
+    color: var(--ink-dim);
+  }
+  .nameplate .tag { letter-spacing: 0.04em; }
+  .nameplate .tag b { color: var(--ink); font-weight: 700; }
+
+  .theme-switch {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    background: none;
+    border: 1px solid var(--rule);
+    border-radius: 999px;
+    padding: 4px 12px 4px 4px;
+    font-family: var(--font-mono);
+    font-size: var(--step-caption);
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--ink-dim);
+    cursor: pointer;
+  }
+  .theme-switch .dot {
+    width: 16px; height: 16px; border-radius: 50%;
+    background: var(--signal);
+    transition: transform 0.15s ease;
+  }
+  :root[data-theme="light"] .theme-switch .dot,
+  :root:not([data-theme]):not([data-theme="dark"]) .theme-switch .dot { transform: translateX(0); }
+  :root[data-theme="dark"] .theme-switch .dot { transform: translateX(2px); }
+
+  /* ── Hero ─────────────────────────────────────────────────────── */
+  .hero {
+    padding: 64px 0 56px;
+    display: grid;
+    grid-template-columns: 1.05fr 0.95fr;
+    gap: 48px;
+    align-items: center;
+  }
+  .hero h1 { font-size: var(--step-h1); line-height: 1.05; margin-top: 10px; }
+  .hero .lede {
+    font-family: var(--font-sans);
+    font-size: var(--step-lede);
+    color: var(--ink-dim);
+    max-width: 46ch;
+    margin-top: 16px;
+  }
+  .cta-row { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 28px; }
+  .btn {
+    font-family: var(--font-mono);
+    font-size: var(--step-small);
+    letter-spacing: 0.02em;
+    padding: 11px 18px;
+    border-radius: 3px;
+    border: 1px solid var(--rule);
+    background: var(--surface);
+    color: var(--ink);
+    text-decoration: none;
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    cursor: pointer;
+  }
+  .btn-primary { background: var(--signal); color: var(--signal-ink); border-color: var(--signal); font-weight: 700; }
+  .btn-install {
+    background: var(--surface-2);
+    color: var(--ink-dim);
+  }
+  .btn-install b { color: var(--ink); font-weight: 700; }
+
+  .stat-row {
+    margin-top: 30px;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 22px;
+    font-family: var(--font-mono);
+    font-size: var(--step-caption);
+    color: var(--ink-dim);
+    letter-spacing: 0.03em;
+  }
+  .stat-row b { color: var(--ink); font-size: var(--step-body); display: block; font-weight: 700; }
+
+  /* ── Protocol trace panel ─────────────────────────────────────── */
+  .readout {
+    position: relative;
+    background: var(--surface);
+    border: 1px solid var(--rule);
+    border-radius: 4px;
+    overflow: hidden;
+    box-shadow: 0 12px 32px -18px var(--shadow);
+  }
+  .readout-head {
+    display: flex;
+    justify-content: space-between;
+    padding: 10px 14px;
+    border-bottom: 1px solid var(--rule);
+    font-family: var(--font-mono);
+    font-size: var(--step-caption);
+    color: var(--ink-dim);
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+  }
+  .readout-body { padding: 16px 18px 18px; font-family: var(--font-mono); font-size: var(--step-small); }
+  .msg { display: flex; align-items: baseline; gap: 10px; padding: 5px 0; }
+  .msg .dir { width: 14px; flex-shrink: 0; }
+  .msg .dir.out { color: var(--signal); }
+  .msg .dir.in { color: var(--copper); }
+  .msg .method { color: var(--ink); }
+  .msg .detail { color: var(--ink-dim); }
+  .msg .ts { margin-left: auto; color: var(--ink-dim); font-variant-numeric: tabular-nums; flex-shrink: 0; }
+  .readout-sweep {
+    position: absolute; inset: 0; pointer-events: none;
+    background: linear-gradient(180deg, transparent 0%, color-mix(in srgb, var(--signal) 14%, transparent) 50%, transparent 100%);
+    height: 45%;
+    animation: sweep 6.5s ease-in-out infinite;
+  }
+  @keyframes sweep {
+    0%   { transform: translateY(-120%); }
+    55%  { transform: translateY(220%); }
+    100% { transform: translateY(220%); }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .readout-sweep { animation: none; display: none; }
+  }
+
+  /* ── Section scaffolding ──────────────────────────────────────── */
+  section.block { padding: 52px 0; border-top: 1px solid var(--rule); }
+  .block-head { margin-bottom: 30px; }
+  .block-head h2 { font-size: var(--step-h2); margin-top: 8px; }
+  .block-head p { color: var(--ink-dim); max-width: 60ch; margin-top: 10px; }
+
+  /* ── Capability rows ──────────────────────────────────────────── */
+  .capability {
+    display: grid;
+    grid-template-columns: 130px 1fr;
+    gap: 24px;
+    padding: 22px 0;
+    border-top: 1px solid var(--rule);
+  }
+  .capability:first-of-type { border-top: none; }
+  .capability .tag {
+    font-family: var(--font-mono);
+    font-size: var(--step-caption);
+    letter-spacing: 0.1em;
+    color: var(--signal);
+    padding-top: 3px;
+  }
+  .capability h3 { font-size: var(--step-h3); }
+  .capability p { color: var(--ink-dim); margin: 8px 0 0; max-width: 62ch; }
+  .capability .detail {
+    margin-top: 10px;
+    font-family: var(--font-mono);
+    font-size: var(--step-caption);
+    color: var(--ink-dim);
+  }
+  .capability .detail b { color: var(--ink); font-weight: 700; }
+
+  /* ── Exhibit (screenshot) ─────────────────────────────────────── */
+  .exhibit-frame {
+    border: 1px solid var(--rule);
+    border-radius: 4px;
+    overflow: hidden;
+    background: var(--surface);
+  }
+  .exhibit-frame img { display: block; width: 100%; height: auto; border-bottom: 1px solid var(--rule); }
+  .exhibit-caption { padding: 14px 18px; font-size: var(--step-small); color: var(--ink-dim); }
+  .exhibit-caption .label {
+    font-family: var(--font-mono);
+    font-size: var(--step-caption);
+    letter-spacing: 0.1em;
+    color: var(--ink);
+    display: block;
+    margin-bottom: 4px;
+  }
+  .exhibit-caption a { color: var(--signal); }
+
+  /* ── Grading gauge ────────────────────────────────────────────── */
+  .gauge-wrap { display: grid; grid-template-columns: 1fr 1fr; gap: 40px; align-items: start; }
+  .gauge {
+    height: 14px;
+    border-radius: 999px;
+    background: linear-gradient(
+      90deg,
+      var(--danger) 0% 45%,
+      var(--copper) 45% 59%,
+      #c9a227 59% 74%,
+      #5a9e6f 74% 89%,
+      var(--success) 89% 100%
+    );
+    position: relative;
+    margin-top: 22px;
+  }
+  .gauge-ticks {
+    display: flex;
+    justify-content: space-between;
+    font-family: var(--font-mono);
+    font-size: var(--step-caption);
+    color: var(--ink-dim);
+    margin-top: 8px;
+  }
+  .gauge-ticks span b { color: var(--ink); }
+  .gauge-marker {
+    position: absolute;
+    top: -8px;
+    width: 2px;
+    height: 30px;
+    background: var(--ink);
+  }
+  .gauge-marker::after {
+    content: attr(data-label);
+    position: absolute;
+    top: -22px;
+    left: 50%;
+    transform: translateX(-50%);
+    font-family: var(--font-mono);
+    font-size: var(--step-caption);
+    color: var(--ink);
+    white-space: nowrap;
+  }
+  .dims { list-style: none; margin: 0; padding: 0; font-size: var(--step-small); }
+  .dims li {
+    display: flex;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 8px 0;
+    border-top: 1px solid var(--rule);
+    color: var(--ink-dim);
+  }
+  .dims li:first-child { border-top: none; }
+  .dims li span:first-child { color: var(--ink); }
+  .dims li b { font-family: var(--font-mono); color: var(--ink-dim); font-variant-numeric: tabular-nums; }
+
+  /* ── Quickstart terminal ──────────────────────────────────────── */
+  .term {
+    background: var(--surface);
+    border: 1px solid var(--rule);
+    border-radius: 4px;
+    font-family: var(--font-mono);
+    font-size: var(--step-small);
+    overflow-x: auto;
+  }
+  .term-row { display: flex; gap: 10px; padding: 12px 16px; border-top: 1px solid var(--rule); align-items: center; }
+  .term-row:first-child { border-top: none; }
+  .term-row .prompt { color: var(--signal); flex-shrink: 0; }
+  .term-row code { color: var(--ink); white-space: pre; }
+  .term-row .comment { color: var(--ink-dim); }
+
+  .quickstart-note { margin-top: 16px; color: var(--ink-dim); font-size: var(--step-small); }
+
+  /* ── Footer ───────────────────────────────────────────────────── */
+  footer.nameplate {
+    border-top: 1px solid var(--rule);
+    border-bottom: none;
+    margin-top: 8px;
+  }
+  footer.nameplate .wrap {
+    flex-wrap: wrap;
+    padding-top: 22px;
+    padding-bottom: 32px;
+  }
+  .footer-links { display: flex; gap: 18px; flex-wrap: wrap; }
+  .footer-links a { color: var(--ink-dim); text-decoration: none; }
+  .footer-links a:hover { color: var(--signal); }
+
+  /* ── Responsive ───────────────────────────────────────────────── */
+  @media (max-width: 760px) {
+    .hero { grid-template-columns: 1fr; padding-top: 40px; }
+    .capability { grid-template-columns: 1fr; gap: 6px; }
+    .gauge-wrap { grid-template-columns: 1fr; gap: 32px; }
+    section.block { padding: 40px 0; }
+  }
+</style>
+</head>
+<body>
+
+<div class="nameplate">
+  <div class="wrap">
+    <span class="tag"><b>MCP-TESTER</b> · v0.1.7 · MIT LICENSE</span>
+    <button class="theme-switch" id="theme-toggle" onclick="toggleTheme()" aria-label="Toggle color theme">
+      <span class="dot"></span><span id="theme-label">SYSTEM</span>
+    </button>
+  </div>
+</div>
+
+<main>
+  <div class="wrap">
+    <section class="hero">
+      <div class="hero-text">
+        <p class="eyebrow">Model Context Protocol — Inspector</p>
+        <h1>MCP Server Tester</h1>
+        <p class="lede">Connect to any MCP server and see what it's actually telling your agent — every tool, every token, every red flag — before you wire it into production.</p>
+        <div class="cta-row">
+          <a class="btn btn-primary" href="https://mcp-tester-gsei.onrender.com" target="_blank" rel="noopener">Open Live Demo →</a>
+          <a class="btn" href="https://github.com/ytkoka/mcp-tester" target="_blank" rel="noopener">View on GitHub</a>
+          <button class="btn btn-install" onclick="copyInstall(this)"><span>$</span><b id="install-cmd">pip install remote-mcp-server-tester</b></button>
+        </div>
+        <div class="stat-row">
+          <div><b>5</b>auth methods</div>
+          <div><b>2</b>transports, auto-fallback</div>
+          <div><b>4</b>token providers</div>
+          <div><b>A–F</b>readiness &amp; risk grading</div>
+        </div>
+      </div>
+
+      <div class="readout">
+        <div class="readout-head"><span>Protocol Trace</span><span>live session</span></div>
+        <div class="readout-body">
+          <div class="msg"><span class="dir out">→</span><span class="method">initialize</span><span class="ts">0 ms</span></div>
+          <div class="msg"><span class="dir in">←</span><span class="detail">protocolVersion "2025-11-25"</span><span class="ts">142 ms</span></div>
+          <div class="msg"><span class="dir out">→</span><span class="method">tools/list</span><span class="ts">142 ms</span></div>
+          <div class="msg"><span class="dir in">←</span><span class="detail">17 tools · ~9,340 tokens</span><span class="ts">388 ms</span></div>
+          <div class="msg"><span class="dir out">→</span><span class="method">resources/list</span><span class="ts">388 ms</span></div>
+          <div class="msg"><span class="dir in">←</span><span class="detail">4 resources</span><span class="ts">402 ms</span></div>
+          <div class="msg"><span class="dir out">→</span><span class="method">tools/call</span><span class="detail">send_email</span><span class="ts">1,120 ms</span></div>
+          <div class="msg"><span class="dir in">←</span><span class="detail" style="color:var(--danger)">⚠ authority-language flagged</span><span class="ts">1,340 ms</span></div>
+        </div>
+        <div class="readout-sweep" aria-hidden="true"></div>
+      </div>
+    </section>
+
+    <section class="block">
+      <div class="block-head">
+        <p class="eyebrow">What it checks</p>
+        <h2>Five things every MCP integration should know before it ships</h2>
+      </div>
+
+      <div class="capability">
+        <span class="tag">INSPECT</span>
+        <div>
+          <h3>Tools, resources, and prompts — as the server actually sends them</h3>
+          <p>Connects over Streamable HTTP or SSE (with automatic fallback), lists every primitive the server advertises, and keeps a full JSON-RPC history — <code>initialize</code>, <code>tools/list</code>, <code>tools/call</code>, and everything between — so you can see exactly what your agent will see.</p>
+          <div class="detail">Fetch timing broken down by phase: <b>transport connect</b> · <b>initialize</b> · <b>list</b> · <b>network overhead</b></div>
+        </div>
+      </div>
+
+      <div class="capability">
+        <span class="tag">SCORE</span>
+        <div>
+          <h3>Token cost and definition quality, before a single query runs</h3>
+          <p>Estimate token usage with a generic heuristic or exact counts from the Claude API and tiktoken (o200k_base / cl100k_base), then grade the tool set A–F on description quality, type coverage, and schema specificity.</p>
+          <div class="detail"><b>4</b> token providers · <b>5</b> weighted scoring dimensions</div>
+        </div>
+      </div>
+
+      <div class="capability">
+        <span class="tag">SECURE</span>
+        <div>
+          <h3>Tool poisoning, rug pulls, and prompt-injection attempts</h3>
+          <p>Heuristics scan every name, description, and schema for hidden Unicode, exfiltration hints, and manipulative phrasing. A per-tool hash is pinned per server, so if a tool's definition silently changes after you've approved it, you get a line-by-line diff and have to explicitly re-confirm — nothing updates behind your back. An optional Claude API deep scan catches paraphrased intent heuristics miss.</p>
+          <div class="detail">Rug pull findings require <b>review + confirm</b> before the pinned definition updates</div>
+        </div>
+      </div>
+
+      <div class="capability">
+        <span class="tag">AUTH</span>
+        <div>
+          <h3>Every auth flow an MCP server actually uses</h3>
+          <p>None, Bearer, OAuth2 Client Credentials, Custom Header, and full interactive SSO with PKCE — including OAuth endpoint auto-discovery and Dynamic Client Registration (RFC 7591), so most servers need zero manual configuration. The Auth Inspector shows exactly which headers went out and decodes the resulting JWT.</p>
+        </div>
+      </div>
+
+      <div class="capability">
+        <span class="tag">COMPARE</span>
+        <div>
+          <h3>Two servers, side by side — and a report you can hand off</h3>
+          <p>Run the same inspection against two endpoints at once to diff latency, token cost, and quality scores. Export a self-contained Markdown or JSON report with secrets redacted, ready to paste into a PR or a Slack thread.</p>
+        </div>
+      </div>
+    </section>
+
+    <section class="block">
+      <div class="block-head">
+        <p class="eyebrow">Exhibit A</p>
+        <h2>A deliberately hostile server, caught on first connect</h2>
+      </div>
+      <div class="exhibit-frame">
+        <img src="mcp-server-tester2.png" alt="MCP Server Tester UI showing the Tool Poisoning Risk card, with findings for hidden Unicode, a rug pull, and a prompt-injection attempt." loading="lazy" width="1498" height="1183" />
+        <div class="exhibit-caption">
+          <span class="label">bad-mcp — a deliberately malicious test server</span>
+          ASCII smuggling, a rug pull, and a hidden prompt injection are all flagged on the first connect. Source: <a href="https://github.com/ytkoka/bad-mcp" target="_blank" rel="noopener">github.com/ytkoka/bad-mcp</a>
+        </div>
+      </div>
+    </section>
+
+    <section class="block">
+      <div class="block-head">
+        <p class="eyebrow">Grading</p>
+        <h2>Every server gets a letter grade, not a vague warning</h2>
+        <p>The same A–F scale is used for both the LLM Readiness Score (are the tool definitions clear enough for an agent to use correctly?) and the Tool Poisoning Risk score (does anything look designed to manipulate the calling agent?).</p>
+      </div>
+      <div class="gauge-wrap">
+        <div>
+          <div class="gauge">
+            <div class="gauge-marker" style="left: 82%" data-label="82 → B"></div>
+          </div>
+          <div class="gauge-ticks">
+            <span>F <b>&lt;45</b></span>
+            <span>D <b>45</b></span>
+            <span>C <b>60</b></span>
+            <span>B <b>75</b></span>
+            <span>A <b>90</b></span>
+          </div>
+        </div>
+        <ul class="dims">
+          <li><span>Tool descriptions</span><b>20%</b></li>
+          <li><span>Param descriptions</span><b>25%</b></li>
+          <li><span>Type definitions</span><b>25%</b></li>
+          <li><span>Required annotation</span><b>15%</b></li>
+          <li><span>Schema specificity</span><b>15%</b></li>
+        </ul>
+      </div>
+    </section>
+
+    <section class="block">
+      <div class="block-head">
+        <p class="eyebrow">Get started</p>
+        <h2>Running locally takes one command</h2>
+      </div>
+      <div class="term">
+        <div class="term-row"><span class="prompt">$</span><code>pip install remote-mcp-server-tester</code></div>
+        <div class="term-row"><span class="prompt">$</span><code>mcp-tester</code><span class="comment"># → http://localhost:8080</span></div>
+      </div>
+      <p class="quickstart-note">No Claude API key required — Generic and tiktoken token counting, plus the heuristic security scan, work fully offline. Or skip installation entirely and try the <a href="https://mcp-tester-gsei.onrender.com" target="_blank" rel="noopener">hosted demo</a> (first request after idle takes ~50s to wake).</p>
+    </section>
+  </div>
+</main>
+
+<footer class="nameplate">
+  <div class="wrap">
+    <span class="tag">mcp-tester · MIT License · not affiliated with Anthropic or the MCP spec authors</span>
+    <div class="footer-links">
+      <a href="https://github.com/ytkoka/mcp-tester" target="_blank" rel="noopener">GitHub</a>
+      <a href="https://github.com/ytkoka/mcp-tester/blob/main/README.md" target="_blank" rel="noopener">README</a>
+      <a href="https://github.com/ytkoka/mcp-tester/blob/main/README.ja.md" target="_blank" rel="noopener">日本語 README</a>
+      <a href="https://mcp-tester-gsei.onrender.com" target="_blank" rel="noopener">Live Demo</a>
+    </div>
+  </div>
+</footer>
+
+<script>
+  function currentEffectiveTheme() {
+    var stamped = document.documentElement.getAttribute('data-theme');
+    if (stamped) return stamped;
+    return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+  }
+  function updateToggleLabel() {
+    var stamped = document.documentElement.getAttribute('data-theme');
+    document.getElementById('theme-label').textContent = stamped ? stamped.toUpperCase() : 'SYSTEM';
+  }
+  function toggleTheme() {
+    var next = currentEffectiveTheme() === 'dark' ? 'light' : 'dark';
+    document.documentElement.setAttribute('data-theme', next);
+    try { localStorage.setItem('mcp-landing-theme', next); } catch (e) {}
+    updateToggleLabel();
+  }
+  updateToggleLabel();
+
+  function copyInstall(btn) {
+    var text = 'pip install remote-mcp-server-tester';
+    var label = document.getElementById('install-cmd');
+    var original = label.textContent;
+    var done = function () { label.textContent = 'Copied to clipboard'; setTimeout(function () { label.textContent = original; }, 1400); };
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(text).then(done, done);
+    } else {
+      done();
+    }
+  }
+</script>
+</body>
+</html>
