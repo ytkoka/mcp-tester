@@ -27,7 +27,7 @@ Inspecting [bad-mcp (a deliberately malicious test server)](https://github.com/y
 | **Fetch timing** | Shows MCP server fetch time, roundtrip time, and a per-phase timing breakdown waterfall |
 | **Auth Inspector** | After connecting, shows the auth method used, headers sent, decoded access token claims (exp, iss, sub, scope), and OAuth endpoints; SSO access tokens are cached and reused until expiry |
 | **LLM Readiness Score** | Grades tool definitions A–F across 5 dimensions; highlights which tools need improvement |
-| **Tool Poisoning Risk** | Heuristic scan for MCP tool poisoning attacks (hidden Unicode, prompt-injection phrasing, credential-exfiltration hints, hidden HTML comments) plus "rug pull" detection (tool description/schema silently changed since last connect to the same server); optional deeper scan via the Claude API |
+| **Tool Poisoning Risk** | Heuristic scan for MCP tool poisoning attacks (hidden Unicode, prompt-injection phrasing, credential-exfiltration hints, hidden HTML comments) plus "rug pull" detection (tool description/schema silently changed since last connect to the same server, with a line-by-line diff and an explicit review-and-confirm step before the pinned definition is updated); optional deeper scan via the Claude API |
 | **Export report** | Download a self-contained Markdown or JSON report (server info, timing, scores, findings) with automatic secret redaction and a built-in disclaimer — generated entirely client-side |
 | **Compare Mode** | Connects to two servers in parallel and compares performance, tokens, quality scores, and documentation |
 | **Multiple auth methods** | None · Bearer Token · OAuth2 Client Credentials · SSO (Authorization Code + PKCE) · Custom Header |
@@ -329,9 +329,11 @@ Each finding is high/medium/low severity; the **Overall Score** starts at 100 an
 
 #### Rug pull detection
 
-A tool's definition can legitimately change between releases — or a malicious server can silently rewrite a tool's description/schema *after* a user has already approved it ("MCP rug pull"). The scan hashes each tool's description + schema per server URL and stores it in the browser (`localStorage`). On a later reconnect to the same URL, any tool whose hash changed is flagged as a high-severity **Rug Pull** finding.
+A tool's definition can legitimately change between releases — or a malicious server can silently rewrite a tool's description/schema *after* a user has already approved it ("MCP rug pull"). The scan pins each tool's description + schema per server URL and stores it in the browser (`localStorage`). On a later reconnect to the same URL, any tool whose pinned definition changed is flagged as a high-severity **Rug Pull** finding.
 
 This is a local, per-browser pin — it resets if you clear site data, and only tracks servers you've connected to from this browser.
+
+**Reviewing and re-pinning a change:** a Rug Pull finding shows a **▶ View changes** button that expands a line-by-line diff (additions/removals highlighted) of exactly what changed in the description and/or input schema. The old pinned definition is deliberately *not* overwritten automatically — it stays flagged on every reconnect until you review the diff and click **✓ Update pinned version**, which re-pins the tool at its current definition so the same change stops being flagged. This prevents a change from being silently accepted the moment it's first observed.
 
 **What a Rug Pull finding does *not* tell you:** the check only detects that a definition *changed* — it cannot tell a malicious rewrite from a legitimate update (e.g. a provider shipping a normal tool update). A trustworthy server can trigger this finding just by updating its tools. Treat it as a prompt to review what changed, not as proof of malicious intent.
 

@@ -532,6 +532,22 @@ details summary::-webkit-details-marker { display: none; }
 .poison-llm-row { margin-top: 12px; padding-top: 10px; border-top: 1px solid var(--border);
   display: flex; align-items: center; justify-content: space-between; gap: 8px; flex-wrap: wrap; }
 
+/* Rug-pull diff review */
+.rugpull-actions { display: flex; align-items: center; gap: 8px; margin-top: 6px; flex-wrap: wrap; }
+.rugpull-status { font-size: 11px; color: var(--success); }
+.rugpull-diff-panel { margin-top: 8px; display: flex; flex-direction: column; gap: 10px; }
+.rugpull-diff-section { border: 1px solid var(--border); border-radius: var(--radius-sm); overflow: hidden; }
+.rugpull-diff-label { font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em;
+  color: var(--text-dim); background: var(--surface2); padding: 4px 8px; border-bottom: 1px solid var(--border); }
+.diff-block { font-family: "SF Mono","Fira Code",monospace; font-size: 11px; line-height: 1.6;
+  max-height: 260px; overflow: auto; }
+.diff-line { padding: 0 8px; white-space: pre-wrap; word-break: break-all; }
+.diff-line.diff-add { background: rgba(63,185,80,0.12); color: var(--success); }
+.diff-line.diff-del { background: rgba(248,81,73,0.12); color: var(--error-text); }
+.diff-line.diff-ctx { color: var(--text-dim); }
+.diff-line.diff-skip { color: var(--text-dim); font-style: italic; text-align: center; padding: 3px 8px;
+  background: var(--surface2); }
+
 /* ── Cost Estimate Card ───────────────────────────────────────── */
 .cost-inputs { display: flex; gap: 16px; margin-bottom: 14px; }
 .cost-inputs > div { flex: 1; }
@@ -3053,14 +3069,15 @@ async function _sha256Hex(s) {
   return Array.from(new Uint8Array(digest)).map(b => b.toString(16).padStart(2, '0')).join('');
 }
 
-// v2 = SHA-256 over canonical JSON. v1 used a 32-bit djb2 hash over JSON.stringify() output,
-// which a malicious server could deliberately collide (e.g. by padding with a few invisible
-// characters) and which false-positived on semantically-equal-but-reordered schemas. Bumping
-// the storage key makes old v1 entries inert instead of being compared against v2 hashes.
-const TOOL_SNAPSHOT_STORAGE_KEY = 'mcp-tool-snapshots-v2';
+// v3 = stores the full { sig, description, inputSchema } per tool, not just the hash, so a
+// changed tool can be diffed against what was previously pinned (see checkRugPull below). v2
+// stored the hash alone, which is enough to detect *that* something changed but not *what* —
+// bumping the storage key makes old v2/v1 entries inert instead of being compared against v3
+// snapshots (they lack the description/schema needed to render a diff).
+const TOOL_SNAPSHOT_STORAGE_KEY = 'mcp-tool-snapshots-v3';
 
 function _loadToolSnapshots() {
-  try { localStorage.removeItem('mcp-tool-snapshots'); } catch { /* storage unavailable */ }
+  try { localStorage.removeItem('mcp-tool-snapshots'); localStorage.removeItem('mcp-tool-snapshots-v2'); } catch { /* storage unavailable */ }
   try { return JSON.parse(localStorage.getItem(TOOL_SNAPSHOT_STORAGE_KEY) || '{}'); } catch { return {}; }
 }
 function _saveToolSnapshots(snap) {
@@ -3068,7 +3085,15 @@ function _saveToolSnapshots(snap) {
 }
 
 // "MCP rug pull": a server silently changes a tool's description/schema after the user
-// already approved it. We pin a hash of each tool per server URL and diff on reconnect.
+// already approved it. We pin { sig, description, inputSchema } per tool per server URL and
+// diff on reconnect.
+//
+// A changed tool's *old* pinned entry is deliberately kept (not overwritten) here — the new
+// value only lives in the finding's `rugPull` payload until the user reviews the diff in the
+// UI and clicks "Update pinned version" (see confirmRugPullUpdate). This means a change keeps
+// getting flagged on every reconnect until it's explicitly acknowledged, instead of being
+// silently accepted the moment it's first observed. New and unchanged tools are pinned/re-pinned
+// immediately since there's nothing to review.
 async function checkRugPull(tools, serverUrl) {
   if (!serverUrl || typeof crypto === 'undefined' || !crypto.subtle) return [];
   const all = _loadToolSnapshots();
@@ -3082,19 +3107,89 @@ async function checkRugPull(tools, serverUrl) {
   const next = {};
   tools.forEach((t, i) => {
     const sig = sigs[i];
-    next[t.name] = sig;
-    if (prev[t.name] && prev[t.name] !== sig) {
+    const prevEntry = prev[t.name];
+    if (prevEntry && prevEntry.sig !== sig) {
+      next[t.name] = prevEntry; // keep the old pin — see comment above
       findings.push({
         severity: 'high', tool: t.name, category: 'rug-pull',
         detail: 'Tool definition (description or schema) changed since it was last seen on this server — possible "rug pull"',
         snippet: '',
+        rugPull: {
+          serverUrl, toolName: t.name,
+          oldDescription: prevEntry.description || '', newDescription: t.description || '',
+          oldSchema: prevEntry.inputSchema || {}, newSchema: t.inputSchema || {},
+        },
       });
+    } else {
+      next[t.name] = { sig, description: t.description || '', inputSchema: t.inputSchema || {} };
     }
   });
 
   all[serverUrl] = next;
   _saveToolSnapshots(all);
   return findings;
+}
+
+// ── Line-based diff (LCS) — used to show what changed in a rug-pull finding ───────
+function _diffLines(oldText, newText) {
+  const a = (oldText || '').split('\n');
+  const b = (newText || '').split('\n');
+  const n = a.length, m = b.length;
+  const dp = Array.from({ length: n + 1 }, () => new Array(m + 1).fill(0));
+  for (let i = n - 1; i >= 0; i--) {
+    for (let j = m - 1; j >= 0; j--) {
+      dp[i][j] = a[i] === b[j] ? dp[i + 1][j + 1] + 1 : Math.max(dp[i + 1][j], dp[i][j + 1]);
+    }
+  }
+  const ops = [];
+  let i = 0, j = 0;
+  while (i < n && j < m) {
+    if (a[i] === b[j]) { ops.push({ type: 'ctx', line: a[i] }); i++; j++; }
+    else if (dp[i + 1][j] >= dp[i][j + 1]) { ops.push({ type: 'del', line: a[i] }); i++; }
+    else { ops.push({ type: 'add', line: b[j] }); j++; }
+  }
+  while (i < n) { ops.push({ type: 'del', line: a[i] }); i++; }
+  while (j < m) { ops.push({ type: 'add', line: b[j] }); j++; }
+  return ops;
+}
+
+// Collapses long runs of unchanged ("ctx") lines down to `context` lines of padding around
+// each change, like `git diff`'s context lines, so a single small edit in a long description
+// or schema doesn't bury the actual change in dozens of unchanged lines.
+function _collapseDiffContext(ops, context = 2) {
+  const result = [];
+  let i = 0;
+  while (i < ops.length) {
+    if (ops[i].type !== 'ctx') { result.push(ops[i]); i++; continue; }
+    let j = i;
+    while (j < ops.length && ops[j].type === 'ctx') j++;
+    const runLen = j - i;
+    const isStart = i === 0, isEnd = j === ops.length;
+    const keepAll = runLen <= context * (isStart || isEnd ? 1 : 2);
+    if (keepAll) {
+      for (let k = i; k < j; k++) result.push(ops[k]);
+    } else {
+      if (!isStart) for (let k = i; k < i + context; k++) result.push(ops[k]);
+      const skipped = runLen - (isStart ? 0 : context) - (isEnd ? 0 : context);
+      result.push({ type: 'skip', count: skipped });
+      if (!isEnd) for (let k = j - context; k < j; k++) result.push(ops[k]);
+    }
+    i = j;
+  }
+  return result;
+}
+
+function renderTextDiff(oldText, newText) {
+  const ops = _collapseDiffContext(_diffLines(oldText, newText), 2);
+  const rows = ops.map(op => {
+    if (op.type === 'skip') {
+      return `<div class="diff-line diff-skip">⋯ ${op.count} unchanged line${op.count !== 1 ? 's' : ''} ⋯</div>`;
+    }
+    const cls = op.type === 'add' ? 'diff-add' : op.type === 'del' ? 'diff-del' : 'diff-ctx';
+    const prefix = op.type === 'add' ? '+ ' : op.type === 'del' ? '- ' : '  ';
+    return `<div class="diff-line ${cls}">${escHtml(prefix + op.line)}</div>`;
+  }).join('');
+  return `<div class="diff-block">${rows}</div>`;
 }
 
 async function scanToolPoisoning(tools, serverUrl) {
@@ -3158,18 +3253,34 @@ async function loadPoisoningCard(tools, serverUrl) {
   bodyEl.outerHTML = renderPoisoningCardBody(s);
 }
 
+// Rug-pull findings carry the old/new description+schema needed to render a diff and to
+// re-pin on confirmation. That payload is looked up by a synthetic per-render id
+// (`rp-<index>`) instead of being embedded in the onclick attribute itself — the description/
+// schema come from a third-party MCP server and are not safe to inline as a JS string literal
+// in an HTML attribute (see the maskToken() history above for exactly this class of bug).
+let _rugPullStore = {};
+
 function renderPoisoningCardBody(s) {
   const g = poisonGrade(s.overall);
 
   const order = { high: 0, medium: 1, low: 2, info: 3 };
   const sorted = [...s.findings].sort((a, b) => order[a.severity] - order[b.severity]);
 
-  const findingsHtml = sorted.map(f => {
+  _rugPullStore = {};
+  const findingsHtml = sorted.map((f, idx) => {
     // Whitelist severity into a fixed literal before using it in an HTML attribute —
     // f.severity only ever comes from our own fixed 'high'|'medium'|'low'|'info' literals
     // today, but this keeps the attribute context safe even if that invariant is ever broken.
     const sevClass = f.severity === 'high' ? 'high' : f.severity === 'medium' ? 'medium'
       : f.severity === 'low' ? 'low' : 'info';
+
+    let rugPullUi = '';
+    if (f.category === 'rug-pull' && f.rugPull) {
+      const rpId = `rp-${idx}`;
+      _rugPullStore[rpId] = f.rugPull;
+      rugPullUi = renderRugPullReview(rpId, f.rugPull);
+    }
+
     return `
     <div class="poison-finding sev-${sevClass}">
       <div class="poison-finding-head">
@@ -3180,6 +3291,7 @@ function renderPoisoningCardBody(s) {
       <div class="poison-detail">${escHtml(f.detail)}</div>
       ${f.snippet ? `<code class="poison-snippet">${escHtml(f.snippet)}</code>` : ''}
       ${f.category === 'rug-pull' ? `<div class="poison-caveat">ℹ️ ${escHtml(RUG_PULL_CAVEAT)}</div>` : ''}
+      ${rugPullUi}
     </div>`;
   }).join('');
 
@@ -3208,6 +3320,71 @@ function renderPoisoningCardBody(s) {
     </div>
     <div id="poison-llm-results"></div>
   </div>`;
+}
+
+function renderRugPullReview(rpId, rp) {
+  const descChanged = rp.oldDescription !== rp.newDescription;
+  const schemaChanged = _canonicalJson(rp.oldSchema) !== _canonicalJson(rp.newSchema);
+
+  let diffHtml = '';
+  if (descChanged) {
+    diffHtml += `<div class="rugpull-diff-section">
+      <div class="rugpull-diff-label">Description</div>
+      ${renderTextDiff(rp.oldDescription, rp.newDescription)}
+    </div>`;
+  }
+  if (schemaChanged) {
+    diffHtml += `<div class="rugpull-diff-section">
+      <div class="rugpull-diff-label">Input Schema</div>
+      ${renderTextDiff(JSON.stringify(rp.oldSchema, null, 2), JSON.stringify(rp.newSchema, null, 2))}
+    </div>`;
+  }
+
+  return `
+    <div class="rugpull-actions">
+      <button class="btn-sm" id="${rpId}-toggle" onclick="toggleRugPullDiff('${rpId}')">▶ View changes</button>
+      <button class="btn-sm" id="${rpId}-confirm" onclick="confirmRugPullUpdate('${rpId}')">✓ Update pinned version</button>
+      <span class="rugpull-status" id="${rpId}-status"></span>
+    </div>
+    <div class="rugpull-diff-panel" id="${rpId}-diff" style="display:none">${diffHtml}</div>`;
+}
+
+function toggleRugPullDiff(rpId) {
+  const panel = document.getElementById(`${rpId}-diff`);
+  const btn = document.getElementById(`${rpId}-toggle`);
+  if (!panel || !btn) return;
+  const opening = panel.style.display === 'none';
+  panel.style.display = opening ? 'flex' : 'none';
+  btn.textContent = opening ? '▼ Hide changes' : '▶ View changes';
+}
+
+// Re-pins the tool at its *current* (new) description/schema, so it stops being flagged as a
+// rug pull on the next reconnect — the explicit action the user takes after reviewing the diff
+// above. Looks the pending values up from _rugPullStore by id rather than the caller passing
+// them directly, for the same reason the diff itself isn't embedded in onclick (see the
+// comment above _rugPullStore).
+async function confirmRugPullUpdate(rpId) {
+  const rp = _rugPullStore[rpId];
+  const btn = document.getElementById(`${rpId}-confirm`);
+  const statusEl = document.getElementById(`${rpId}-status`);
+  if (!rp || !btn) return;
+
+  btn.disabled = true;
+  try {
+    const sig = await _sha256Hex(_canonicalJson({ d: rp.newDescription || '', s: rp.newSchema || {} }));
+    const all = _loadToolSnapshots();
+    all[rp.serverUrl] = all[rp.serverUrl] || {};
+    all[rp.serverUrl][rp.toolName] = { sig, description: rp.newDescription || '', inputSchema: rp.newSchema || {} };
+    _saveToolSnapshots(all);
+
+    btn.textContent = '✓ Updated';
+    if (statusEl) statusEl.textContent = 'Won\'t be flagged again unless it changes further.';
+    const toggleBtn = document.getElementById(`${rpId}-toggle`);
+    if (toggleBtn) toggleBtn.disabled = true;
+  } catch (e) {
+    btn.disabled = false;
+    if (statusEl) statusEl.textContent = `Failed to update: ${e.message || e}`;
+  }
 }
 
 async function runLLMSecurityScan() {
